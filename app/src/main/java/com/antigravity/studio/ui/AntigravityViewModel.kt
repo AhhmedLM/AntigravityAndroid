@@ -45,15 +45,15 @@ class AntigravityViewModel(application: Application) : AndroidViewModel(applicat
     private val _uiState: MutableStateFlow<AntigravityUiState>
 
     init {
-        val savedApiKey = prefs.getString("gemini_api_key", "") ?: ""
-        val savedEmail = prefs.getString("google_email", "") ?: ""
-        val savedDisplayName = prefs.getString("google_display_name", "") ?: ""
+        val savedToken = prefs.getString("antigravity_auth_token", "") ?: ""
+        val savedEmail = prefs.getString("antigravity_email", "") ?: ""
+        val savedDisplayName = prefs.getString("antigravity_display_name", "") ?: ""
         val savedAuthTypeStr = prefs.getString("auth_type", "NONE") ?: "NONE"
 
         val authType = when {
-            savedAuthTypeStr == "GOOGLE_ACCOUNT" -> AuthType.GOOGLE_ACCOUNT
-            savedAuthTypeStr == "GEMINI_API_KEY" -> AuthType.GEMINI_API_KEY
-            savedApiKey.isNotBlank() -> AuthType.GEMINI_API_KEY
+            savedAuthTypeStr == "ANTIGRAVITY_ACCOUNT" -> AuthType.ANTIGRAVITY_ACCOUNT
+            savedAuthTypeStr == "ANTIGRAVITY_TOKEN" -> AuthType.ANTIGRAVITY_TOKEN
+            savedToken.isNotBlank() -> AuthType.ANTIGRAVITY_TOKEN
             else -> AuthType.NONE
         }
 
@@ -62,13 +62,13 @@ class AntigravityViewModel(application: Application) : AndroidViewModel(applicat
             authType = authType,
             userEmail = savedEmail,
             displayName = savedDisplayName.ifBlank {
-                if (authType == AuthType.GEMINI_API_KEY) "Gemini Developer" else ""
+                if (authType == AuthType.ANTIGRAVITY_TOKEN) "Antigravity User" else ""
             }
         )
 
         _uiState = MutableStateFlow(
             AntigravityUiState(
-                apiKey = savedApiKey,
+                authToken = savedToken,
                 authState = initialAuthState
             )
         )
@@ -89,7 +89,7 @@ class AntigravityViewModel(application: Application) : AndroidViewModel(applicat
             val boundService = binder.getService()
             daemonService = boundService
             isBound = true
-            boundService.setApiKey(_uiState.value.apiKey)
+            boundService.setAntigravityAuthToken(_uiState.value.authToken)
             attachServiceCollectors(boundService)
         }
 
@@ -334,7 +334,7 @@ class AntigravityViewModel(application: Application) : AndroidViewModel(applicat
         _uiState.update { it.copy(isSignInDialogVisible = visible) }
     }
 
-    fun signInWithGoogle(context: Context) {
+    fun signInWithAntigravity(context: Context) {
         val authUrl = _uiState.value.detectedAuthUrl
             ?: "https://antigravity.google/cli/auth"
 
@@ -346,19 +346,19 @@ class AntigravityViewModel(application: Application) : AndroidViewModel(applicat
         }
 
         val userName = "Ahmed"
-        val userEmail = "ahhmed@google.com"
+        val userEmail = "ahhmedlm@antigravity.studio"
 
         prefs.edit()
-            .putString("auth_type", "GOOGLE_ACCOUNT")
-            .putString("google_email", userEmail)
-            .putString("google_display_name", userName)
+            .putString("auth_type", "ANTIGRAVITY_ACCOUNT")
+            .putString("antigravity_email", userEmail)
+            .putString("antigravity_display_name", userName)
             .apply()
 
         _uiState.update {
             it.copy(
                 authState = AuthState(
                     isSignedIn = true,
-                    authType = AuthType.GOOGLE_ACCOUNT,
+                    authType = AuthType.ANTIGRAVITY_ACCOUNT,
                     userEmail = userEmail,
                     displayName = userName
                 ),
@@ -367,67 +367,43 @@ class AntigravityViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    fun verifyAndSaveApiKey(key: String) {
-        val trimmed = key.trim()
+    fun saveAntigravityToken(token: String) {
+        val trimmed = token.trim()
         if (trimmed.isEmpty()) return
 
-        viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update {
-                it.copy(authState = it.authState.copy(isVerifying = true, authErrorMessage = null))
-            }
+        val userName = "Ahmed (Antigravity)"
+        val userEmail = "ahhmedlm@antigravity.studio"
 
-            val client = OkHttpClient()
-            val verifyUrl = "https://generativelanguage.googleapis.com/v1beta/models?key=$trimmed"
-            val request = Request.Builder().url(verifyUrl).build()
+        prefs.edit()
+            .putString("antigravity_auth_token", trimmed)
+            .putString("auth_type", "ANTIGRAVITY_TOKEN")
+            .putString("antigravity_display_name", userName)
+            .putString("antigravity_email", userEmail)
+            .apply()
 
-            val isValid = runCatching {
-                client.newCall(request).execute().use { response ->
-                    response.isSuccessful
-                }
-            }.getOrDefault(false)
+        daemonService?.setAntigravityAuthToken(trimmed)
 
-            if (isValid || trimmed.startsWith("AIzaSy")) {
-                prefs.edit()
-                    .putString("gemini_api_key", trimmed)
-                    .putString("auth_type", "GEMINI_API_KEY")
-                    .putString("google_display_name", "Gemini Developer")
-                    .putString("google_email", "developer@gemini.api")
-                    .apply()
-
-                daemonService?.setApiKey(trimmed)
-
-                _uiState.update {
-                    it.copy(
-                        apiKey = trimmed,
-                        authState = AuthState(
-                            isSignedIn = true,
-                            authType = AuthType.GEMINI_API_KEY,
-                            displayName = "Gemini Developer",
-                            userEmail = "developer@gemini.api",
-                            isVerifying = false
-                        ),
-                        isSignInDialogVisible = false
-                    )
-                }
-            } else {
-                _uiState.update {
-                    it.copy(
-                        authState = it.authState.copy(
-                            isVerifying = false,
-                            authErrorMessage = "Invalid API Key. Please verify key from Google AI Studio."
-                        )
-                    )
-                }
-            }
+        _uiState.update {
+            it.copy(
+                authToken = trimmed,
+                authState = AuthState(
+                    isSignedIn = true,
+                    authType = AuthType.ANTIGRAVITY_TOKEN,
+                    displayName = userName,
+                    userEmail = userEmail,
+                    isVerifying = false
+                ),
+                isSignInDialogVisible = false
+            )
         }
     }
 
     fun signOut() {
         prefs.edit().clear().apply()
-        daemonService?.setApiKey("")
+        daemonService?.setAntigravityAuthToken("")
         _uiState.update {
             it.copy(
-                apiKey = "",
+                authToken = "",
                 authState = AuthState(isSignedIn = false, authType = AuthType.NONE),
                 isSignInDialogVisible = false
             )

@@ -196,8 +196,8 @@ class AgentDaemonService : Service() {
         }
     }
 
-    fun setApiKey(apiKey: String) {
-        processManager.apiKeyOverride = apiKey.trim()
+    fun setAntigravityAuthToken(token: String) {
+        processManager.antigravityAuthToken = token.trim()
     }
 
     private fun promoteToForeground(status: EngineStatus, customDetail: String? = null) {

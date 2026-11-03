@@ -132,8 +132,8 @@ fun AntigravityStudioScreen(
     onToggleThoughtExpanded: (String) -> Unit,
     onOpenDiffReview: (ChatTimelineItem.GitDiffCard?) -> Unit,
     onSetSignInVisible: (Boolean) -> Unit,
-    onSignInWithGoogle: (Context) -> Unit,
-    onVerifyApiKey: (String) -> Unit,
+    onSignInWithAntigravity: (Context) -> Unit,
+    onSaveAuthToken: (String) -> Unit,
     onSignOut: () -> Unit,
     onSetTerminalSheetVisible: (Boolean) -> Unit,
     onRunTerminalCommand: (String) -> Unit,
@@ -154,10 +154,10 @@ fun AntigravityStudioScreen(
     if (uiState.isSignInDialogVisible) {
         AntigravitySignInDialog(
             authState = uiState.authState,
-            currentApiKey = uiState.apiKey,
+            currentAuthToken = uiState.authToken,
             detectedAuthUrl = uiState.detectedAuthUrl,
-            onSignInWithGoogle = { onSignInWithGoogle(context) },
-            onVerifyApiKey = onVerifyApiKey,
+            onSignInWithAntigravity = { onSignInWithAntigravity(context) },
+            onSaveAuthToken = onSaveAuthToken,
             onSignOut = onSignOut,
             onDismiss = { onSetSignInVisible(false) }
         )
@@ -549,7 +549,7 @@ private fun AuthTopPill(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
             ) {
-                GoogleGIcon(modifier = Modifier.size(13.dp))
+                AntigravityArchLogo(modifier = Modifier.size(13.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = "Sign in",
@@ -712,7 +712,7 @@ private fun MobileNavigationDrawerContent(
                             color = AntigravityPalette.TextPrimary
                         )
                         Text(
-                            text = if (uiState.authState.authType == AuthType.GOOGLE_ACCOUNT) "Google Connected" else "Gemini API Active",
+                            text = if (uiState.authState.authType == AuthType.ANTIGRAVITY_ACCOUNT) "Antigravity Connected" else "AGY Token Active",
                             fontSize = 11.5.sp,
                             color = AntigravityPalette.StatusActiveGreen
                         )
@@ -725,18 +725,18 @@ private fun MobileNavigationDrawerContent(
                             .clip(CircleShape)
                             .background(AntigravityPalette.SurfaceElevated)
                     ) {
-                        GoogleGIcon(modifier = Modifier.size(18.dp))
+                        AntigravityArchLogo(modifier = Modifier.size(18.dp))
                     }
                     Spacer(modifier = Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Sign in with Google",
+                            text = "Sign in to Antigravity",
                             fontSize = 13.5.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = AntigravityPalette.TextPrimary
                         )
                         Text(
-                            text = "Unlock live agent models",
+                            text = "Antigravity CLI (agy) account",
                             fontSize = 11.sp,
                             color = AntigravityPalette.TextMuted
                         )
@@ -1077,19 +1077,19 @@ fun AntigravityPromptComposerCard(
 }
 
 /**
- * Dedicated Google / Gemini Authentication Dialog.
+ * Dedicated Antigravity Account & CLI Authentication Dialog.
  */
 @Composable
 fun AntigravitySignInDialog(
     authState: AuthState,
-    currentApiKey: String,
+    currentAuthToken: String,
     detectedAuthUrl: String?,
-    onSignInWithGoogle: () -> Unit,
-    onVerifyApiKey: (String) -> Unit,
+    onSignInWithAntigravity: () -> Unit,
+    onSaveAuthToken: (String) -> Unit,
     onSignOut: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    var apiKeyInput by remember(currentApiKey) { mutableStateOf(currentApiKey) }
+    var tokenInput by remember(currentAuthToken) { mutableStateOf(currentAuthToken) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1101,7 +1101,7 @@ fun AntigravitySignInDialog(
                 AntigravityArchLogo(modifier = Modifier.size(20.dp))
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
-                    text = if (authState.isSignedIn) "Account & Credentials" else "Sign In to Antigravity",
+                    text = if (authState.isSignedIn) "Antigravity Account" else "Sign In to Antigravity",
                     style = MaterialTheme.typography.titleMedium
                 )
             }
@@ -1126,7 +1126,7 @@ fun AntigravitySignInDialog(
                                         .background(AntigravityPalette.AccentPrimary)
                                 ) {
                                     Text(
-                                        text = authState.displayName.take(1),
+                                        text = authState.displayName.take(1).ifEmpty { "A" },
                                         fontWeight = FontWeight.Bold,
                                         color = Color.White
                                     )
@@ -1134,13 +1134,13 @@ fun AntigravitySignInDialog(
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Column {
                                     Text(
-                                        text = authState.displayName,
+                                        text = authState.displayName.ifEmpty { "Antigravity User" },
                                         fontSize = 14.sp,
                                         fontWeight = FontWeight.SemiBold,
                                         color = AntigravityPalette.TextPrimary
                                     )
                                     Text(
-                                        text = authState.userEmail,
+                                        text = authState.userEmail.ifEmpty { "authenticated via agy" },
                                         fontSize = 12.sp,
                                         color = AntigravityPalette.TextMuted
                                     )
@@ -1148,7 +1148,7 @@ fun AntigravitySignInDialog(
                             }
                             Spacer(modifier = Modifier.height(10.dp))
                             Text(
-                                text = "Authentication active: All CLI commands will authenticate under this account.",
+                                text = "Authentication active: Antigravity CLI (agy v1.4.12) executes natively with full access.",
                                 fontSize = 11.5.sp,
                                 color = AntigravityPalette.TextSecondary
                             )
@@ -1165,22 +1165,22 @@ fun AntigravitySignInDialog(
                         Text("Sign Out")
                     }
                 } else {
-                    // Option 1: Sign in with Google (Primary)
+                    // Option 1: Sign in with Antigravity
                     Button(
-                        onClick = onSignInWithGoogle,
+                        onClick = onSignInWithAntigravity,
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color.White,
-                            contentColor = Color.Black
+                            containerColor = AntigravityPalette.AccentPrimary,
+                            contentColor = Color.White
                         ),
                         shape = RoundedCornerShape(8.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(44.dp)
                     ) {
-                        GoogleGIcon(modifier = Modifier.size(18.dp))
+                        AntigravityArchLogo(modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = "Sign in with Google",
+                            text = "Sign in with Antigravity",
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 13.5.sp
                         )
@@ -1192,7 +1192,7 @@ fun AntigravitySignInDialog(
                     ) {
                         HorizontalDivider(modifier = Modifier.weight(1f), color = AntigravityPalette.BorderSubtle)
                         Text(
-                            text = " OR USE API KEY ",
+                            text = " OR AUTH TOKEN ",
                             fontSize = 11.sp,
                             color = AntigravityPalette.TextMuted,
                             modifier = Modifier.padding(horizontal = 8.dp)
@@ -1200,12 +1200,12 @@ fun AntigravitySignInDialog(
                         HorizontalDivider(modifier = Modifier.weight(1f), color = AntigravityPalette.BorderSubtle)
                     }
 
-                    // Option 2: Enter Gemini API Key
+                    // Option 2: Enter Antigravity Auth Token
                     Column {
                         OutlinedTextField(
-                            value = apiKeyInput,
-                            onValueChange = { apiKeyInput = it },
-                            placeholder = { Text("Paste AIzaSy... key", fontSize = 12.sp) },
+                            value = tokenInput,
+                            onValueChange = { tokenInput = it },
+                            placeholder = { Text("Paste Antigravity Auth Token / agy key", fontSize = 12.sp) },
                             singleLine = true,
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedContainerColor = AntigravityPalette.BackgroundOled,
@@ -1230,17 +1230,13 @@ fun AntigravitySignInDialog(
                         Spacer(modifier = Modifier.height(8.dp))
 
                         Button(
-                            onClick = { onVerifyApiKey(apiKeyInput) },
-                            enabled = apiKeyInput.isNotBlank() && !authState.isVerifying,
-                            colors = ButtonDefaults.buttonColors(containerColor = AntigravityPalette.AccentPrimary),
+                            onClick = { onSaveAuthToken(tokenInput) },
+                            enabled = tokenInput.isNotBlank() && !authState.isVerifying,
+                            colors = ButtonDefaults.buttonColors(containerColor = AntigravityPalette.SurfaceElevated),
                             shape = RoundedCornerShape(8.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            if (authState.isVerifying) {
-                                CircularProgressIndicator(color = Color.White, modifier = Modifier.size(16.dp))
-                            } else {
-                                Text("Verify & Save API Key")
-                            }
+                            Text("Save Antigravity Auth Token", color = AntigravityPalette.TextPrimary)
                         }
                     }
                 }
@@ -1574,15 +1570,6 @@ private fun AntigravityArchLogo(modifier: Modifier = Modifier) {
     }
 }
 
-@Composable
-private fun GoogleGIcon(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        drawCircle(color = Color(0xFF4285F4), radius = w * 0.42f)
-        drawLine(Color.White, Offset(w * 0.5f, h * 0.5f), Offset(w * 0.85f, h * 0.5f), strokeWidth = w * 0.15f)
-    }
-}
 
 @Composable
 private fun ShieldCheckIcon(color: Color, modifier: Modifier = Modifier) {
@@ -1620,8 +1607,8 @@ fun AntigravityMobilePreview() {
             onToggleThoughtExpanded = {},
             onOpenDiffReview = {},
             onSetSignInVisible = {},
-            onSignInWithGoogle = {},
-            onVerifyApiKey = {},
+            onSignInWithAntigravity = {},
+            onSaveAuthToken = {},
             onSignOut = {},
             onSetTerminalSheetVisible = {},
             onRunTerminalCommand = {}

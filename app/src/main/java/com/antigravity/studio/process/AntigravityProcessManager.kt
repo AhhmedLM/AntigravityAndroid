@@ -154,7 +154,7 @@ class AntigravityProcessManager(
     private var stdinWriter: BufferedWriter? = null
 
     @Volatile
-    var apiKeyOverride: String = ""
+    var antigravityAuthToken: String = ""
 
     private val _processState = MutableStateFlow<DaemonProcessState>(DaemonProcessState.Stopped)
     val processState: StateFlow<DaemonProcessState> = _processState.asStateFlow()
@@ -379,36 +379,27 @@ class AntigravityProcessManager(
                 port = DEFAULT_PORT
             )
 
-            // If `agy` exited without a result (e.g. first-run Google Sign-In required on device)
+            // If `agy` exited without a result (e.g. first-run Antigravity Sign-In required on device)
             if (!receivedStructuredResult && exitCode != 0) {
                 val errText = stderrBuilder.toString().trim()
-                if (apiKeyOverride.isNotBlank()) {
-                    emitLog("[agy] Falling back to direct Gemini API key execution...")
-                    executeDirectGeminiApiFallback(
-                        prompt = prompt,
-                        modelId = modelId,
-                        conversationId = conversationId ?: "conv-${System.currentTimeMillis()}"
-                    )
+                val guidance = if (errText.isNotEmpty()) {
+                    "Antigravity CLI (`agy` v1.4.12) returned exit $exitCode:\n```\n$errText\n```\n" +
+                        "Tip: Tap the **Antigravity Account** icon above to sign in or authenticate."
                 } else {
-                    val guidance = if (errText.isNotEmpty()) {
-                        "Antigravity CLI (`agy` v1.4.12) returned exit $exitCode:\n```\n$errText\n```\n" +
-                            "Tip: Open **Settings** (bottom-left) to authenticate `agy` or set your `GEMINI_API_KEY`."
-                    } else {
-                        "Antigravity CLI (`agy` v1.4.12) requires initial Google authentication on this device. Open **Settings** -> **Authenticate CLI / API Key**."
-                    }
-                    _streamEvents.emit(
-                        AgyStreamEvent.TurnResult(
-                            conversationId = conversationId ?: "conv-init",
-                            status = "AUTH_REQUIRED",
-                            fullResponse = guidance,
-                            durationSeconds = 0.5,
-                            inputTokens = 0,
-                            outputTokens = 0,
-                            totalTokens = 0,
-                            errorMessage = errText
-                        )
-                    )
+                    "Antigravity CLI (`agy` v1.4.12) requires Antigravity authentication. Tap the Account icon above to Sign In."
                 }
+                _streamEvents.emit(
+                    AgyStreamEvent.TurnResult(
+                        conversationId = conversationId ?: "conv-init",
+                        status = "AUTH_REQUIRED",
+                        fullResponse = guidance,
+                        durationSeconds = 0.5,
+                        inputTokens = 0,
+                        outputTokens = 0,
+                        totalTokens = 0,
+                        errorMessage = errText
+                    )
+                )
             }
         }
     }
@@ -536,79 +527,6 @@ class AntigravityProcessManager(
     }
 
     /**
-     * Direct Gemini API execution fallback when the user provides a `GEMINI_API_KEY` in Settings.
-     */
-    private suspend fun executeDirectGeminiApiFallback(
-        prompt: String,
-        modelId: String,
-        conversationId: String
-    ) {
-        val startMs = System.currentTimeMillis()
-        val apiModel = when {
-            modelId.contains("flash") -> "gemini-2.5-flash"
-            else -> "gemini-2.5-pro"
-        }
-        val url = "https://generativelanguage.googleapis.com/v1beta/models/$apiModel:generateContent?key=$apiKeyOverride"
-        val bodyJson = """
-            {
-              "contents": [{"parts": [{"text": ${ Json.encodeToString(kotlinx.serialization.serializer(), prompt) }}]}]
-            }
-        """.trimIndent()
-
-        runCatching {
-            val req = Request.Builder()
-                .url(url)
-                .post(bodyJson.toRequestBody("application/json".toMediaType()))
-                .build()
-            httpClient.newCall(req).execute().use { resp ->
-                val raw = resp.body?.string().orEmpty()
-                val parsed = json.parseToJsonElement(raw).jsonObject
-                val text = parsed["candidates"]
-                    ?.jsonArray?.firstOrNull()
-                    ?.jsonObject?.get("content")
-                    ?.jsonObject?.get("parts")
-                    ?.jsonArray?.firstOrNull()
-                    ?.jsonObject?.get("text")
-                    ?.jsonPrimitive?.content
-                    ?: "HTTP ${resp.code}: $raw"
-
-                val elapsedSec = (System.currentTimeMillis() - startMs) / 1000.0
-                _streamEvents.emit(
-                    AgyStreamEvent.TextDelta(
-                        conversationId = conversationId,
-                        delta = text,
-                        durationSeconds = elapsedSec
-                    )
-                )
-                _streamEvents.emit(
-                    AgyStreamEvent.TurnResult(
-                        conversationId = conversationId,
-                        status = "SUCCESS",
-                        fullResponse = text,
-                        durationSeconds = elapsedSec,
-                        inputTokens = prompt.length / 4,
-                        outputTokens = text.length / 4,
-                        totalTokens = (prompt.length + text.length) / 4
-                    )
-                )
-            }
-        }.onFailure { err ->
-            _streamEvents.emit(
-                AgyStreamEvent.TurnResult(
-                    conversationId = conversationId,
-                    status = "ERROR",
-                    fullResponse = "API request failed: ${err.message}",
-                    durationSeconds = 0.2,
-                    inputTokens = 0,
-                    outputTokens = 0,
-                    totalTokens = 0,
-                    errorMessage = err.message
-                )
-            )
-        }
-    }
-
-    /**
      * Executes any `agy` or shell command inside the workspace and streams stdout/stderr to `outputFlow`.
      */
     suspend fun executeWorkspaceCommand(
@@ -645,7 +563,7 @@ class AntigravityProcessManager(
     }
 
     /**
-     * Sends input (such as OAuth verification code or interactive confirmation) to active `agy` stdin.
+     * Sends input (such as verification code or interactive confirmation) to active `agy` stdin.
      */
     suspend fun writeToStdin(input: String): Boolean = withContext(ioDispatcher) {
         try {
@@ -692,7 +610,7 @@ class AntigravityProcessManager(
             }
         }
 
-    private fun runQuickCliCommand(
+    fun runQuickCliCommand(
         paths: RuntimeInstaller.RuntimePaths,
         command: List<String>,
         timeoutMs: Long = 5_000L
@@ -727,9 +645,9 @@ class AntigravityProcessManager(
         env["NODE_OPTIONS"] = "--max-old-space-size=$MAX_HEAP_MB"
         env["GOMEMLIMIT"] = "${MAX_HEAP_MB}MiB"
         env["TERM"] = "xterm-256color"
-        if (apiKeyOverride.isNotBlank()) {
-            env["GEMINI_API_KEY"] = apiKeyOverride
-            env["GOOGLE_API_KEY"] = apiKeyOverride
+        if (antigravityAuthToken.isNotBlank()) {
+            env["ANTIGRAVITY_AUTH_TOKEN"] = antigravityAuthToken
+            env["AGY_TOKEN"] = antigravityAuthToken
         }
     }
 

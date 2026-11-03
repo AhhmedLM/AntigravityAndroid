@@ -37,8 +37,8 @@ enum class CheckoutMode(val label: String) {
 
 enum class AuthType {
     NONE,
-    GOOGLE_ACCOUNT,
-    GEMINI_API_KEY
+    ANTIGRAVITY_ACCOUNT,
+    ANTIGRAVITY_TOKEN
 }
 
 data class AuthState(
@@ -125,7 +125,7 @@ data class AntigravityUiState(
     val chatTimeline: List<ChatTimelineItem> = emptyList(),
     val backgroundCommands: List<BackgroundCommandItem> = SampleStudioData.defaultCommands,
     val terminalLogs: List<String> = SampleStudioData.defaultTerminalLogs,
-    val apiKey: String = "",
+    val authToken: String = "",
     val detectedAuthUrl: String? = null,
     val activeDiffForReview: ChatTimelineItem.GitDiffCard? = null
 ) {
