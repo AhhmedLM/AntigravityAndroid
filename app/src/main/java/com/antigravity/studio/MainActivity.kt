@@ -60,10 +60,11 @@ class MainActivity : ComponentActivity() {
                     onSelectCheckoutMode = viewModel::selectCheckoutMode,
                     onToggleThoughtExpanded = viewModel::toggleThoughtExpanded,
                     onOpenDiffReview = viewModel::openDiffReview,
-                    onToggleOpenIdePane = viewModel::toggleOpenIdePane,
-                    onSetOpenIdePaneVisible = viewModel::setOpenIdePaneVisible,
-                    onSetSettingsVisible = viewModel::setSettingsDialogVisible,
-                    onSaveApiKey = viewModel::saveApiKey,
+                    onSetSignInVisible = viewModel::setSignInDialogVisible,
+                    onSignInWithGoogle = viewModel::signInWithGoogle,
+                    onVerifyApiKey = viewModel::verifyAndSaveApiKey,
+                    onSignOut = viewModel::signOut,
+                    onSetTerminalSheetVisible = viewModel::setTerminalSheetVisible,
                     onRunTerminalCommand = viewModel::runTerminalCommand,
                     modifier = Modifier
                         .fillMaxSize()

@@ -11,3 +11,6 @@
 *.keystore
 *.jks
 app/src/main/assets/runtime/cli_android_arm64.agypkg
+
+*.apk
+

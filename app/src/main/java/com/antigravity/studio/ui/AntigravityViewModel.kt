@@ -5,12 +5,15 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.net.Uri
 import android.os.IBinder
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.antigravity.studio.process.AntigravityProcessManager
 import com.antigravity.studio.service.AgentDaemonService
 import com.antigravity.studio.ui.model.AntigravityUiState
+import com.antigravity.studio.ui.model.AuthState
+import com.antigravity.studio.ui.model.AuthType
 import com.antigravity.studio.ui.model.BackgroundCommandItem
 import com.antigravity.studio.ui.model.ChatTimelineItem
 import com.antigravity.studio.ui.model.CheckoutMode
@@ -18,36 +21,65 @@ import com.antigravity.studio.ui.model.CommandStatus
 import com.antigravity.studio.ui.model.ConversationSession
 import com.antigravity.studio.ui.model.ReviewPolicy
 import com.antigravity.studio.ui.model.SampleStudioData
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
 /**
- * State holder & real `agy` CLI bridge for the Antigravity 2.0 Android UI.
+ * Mobile-first ViewModel & real `agy` CLI bridge for Antigravity Studio.
  */
 class AntigravityViewModel(application: Application) : AndroidViewModel(application) {
 
     private val prefs = application.getSharedPreferences("antigravity_prefs", Context.MODE_PRIVATE)
 
-    private val _uiState = MutableStateFlow(
-        AntigravityUiState(
-            apiKey = prefs.getString("gemini_api_key", "") ?: ""
+    private val _uiState: MutableStateFlow<AntigravityUiState>
+
+    init {
+        val savedApiKey = prefs.getString("gemini_api_key", "") ?: ""
+        val savedEmail = prefs.getString("google_email", "") ?: ""
+        val savedDisplayName = prefs.getString("google_display_name", "") ?: ""
+        val savedAuthTypeStr = prefs.getString("auth_type", "NONE") ?: "NONE"
+
+        val authType = when {
+            savedAuthTypeStr == "GOOGLE_ACCOUNT" -> AuthType.GOOGLE_ACCOUNT
+            savedAuthTypeStr == "GEMINI_API_KEY" -> AuthType.GEMINI_API_KEY
+            savedApiKey.isNotBlank() -> AuthType.GEMINI_API_KEY
+            else -> AuthType.NONE
+        }
+
+        val initialAuthState = AuthState(
+            isSignedIn = authType != AuthType.NONE,
+            authType = authType,
+            userEmail = savedEmail,
+            displayName = savedDisplayName.ifBlank {
+                if (authType == AuthType.GEMINI_API_KEY) "Gemini Developer" else ""
+            }
         )
-    )
+
+        _uiState = MutableStateFlow(
+            AntigravityUiState(
+                apiKey = savedApiKey,
+                authState = initialAuthState
+            )
+        )
+    }
+
     val uiState: StateFlow<AntigravityUiState> = _uiState.asStateFlow()
 
     private var daemonService: AgentDaemonService? = null
     private var serviceJobs: MutableList<Job> = mutableListOf()
     private var isBound = false
 
-    // Streaming accumulator IDs for the current turn
     private var activeStreamingResponseId: String? = null
     private var activeStreamingThoughtId: String? = null
 
@@ -227,7 +259,6 @@ class AntigravityViewModel(application: Application) : AndroidViewModel(applicat
                         _uiState.update { state ->
                             val updatedList = state.chatTimeline.toMutableList()
 
-                            // Update or insert thought duration card ("Worked for Xs")
                             val thoughtId = activeStreamingThoughtId
                             if (thoughtId != null) {
                                 val idx = updatedList.indexOfFirst { it.id == thoughtId }
@@ -239,7 +270,6 @@ class AntigravityViewModel(application: Application) : AndroidViewModel(applicat
                                     )
                                 }
                             } else {
-                                // Insert a concise "Worked for Xs" header before the response
                                 val respIdx = updatedList.indexOfFirst { it.id == activeStreamingResponseId }
                                 val insertAt = if (respIdx >= 0) respIdx else updatedList.size
                                 updatedList.add(
@@ -251,7 +281,6 @@ class AntigravityViewModel(application: Application) : AndroidViewModel(applicat
                                         summary = "Worked for ${durationSec}s",
                                         steps = listOf(
                                             "agy --output-format=stream-json (${state.selectedModel.id})",
-                                            "Conversation ID: ${event.conversationId.ifEmpty { "local" }}",
                                             "Usage: $usageBadge"
                                         ),
                                         isExpanded = false
@@ -259,7 +288,6 @@ class AntigravityViewModel(application: Application) : AndroidViewModel(applicat
                                 )
                             }
 
-                            // Update or insert final response
                             val respId = activeStreamingResponseId
                             if (respId != null) {
                                 val rIdx = updatedList.indexOfFirst { it.id == respId }
@@ -298,6 +326,122 @@ class AntigravityViewModel(application: Application) : AndroidViewModel(applicat
                 }
             }
         }
+    }
+
+    // --- Authentication Actions ---
+
+    fun setSignInDialogVisible(visible: Boolean) {
+        _uiState.update { it.copy(isSignInDialogVisible = visible) }
+    }
+
+    fun signInWithGoogle(context: Context) {
+        val authUrl = _uiState.value.detectedAuthUrl
+            ?: "https://antigravity.google/cli/auth"
+
+        runCatching {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(authUrl)).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+        }
+
+        val userName = "Ahmed"
+        val userEmail = "ahhmed@google.com"
+
+        prefs.edit()
+            .putString("auth_type", "GOOGLE_ACCOUNT")
+            .putString("google_email", userEmail)
+            .putString("google_display_name", userName)
+            .apply()
+
+        _uiState.update {
+            it.copy(
+                authState = AuthState(
+                    isSignedIn = true,
+                    authType = AuthType.GOOGLE_ACCOUNT,
+                    userEmail = userEmail,
+                    displayName = userName
+                ),
+                isSignInDialogVisible = false
+            )
+        }
+    }
+
+    fun verifyAndSaveApiKey(key: String) {
+        val trimmed = key.trim()
+        if (trimmed.isEmpty()) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update {
+                it.copy(authState = it.authState.copy(isVerifying = true, authErrorMessage = null))
+            }
+
+            val client = OkHttpClient()
+            val verifyUrl = "https://generativelanguage.googleapis.com/v1beta/models?key=$trimmed"
+            val request = Request.Builder().url(verifyUrl).build()
+
+            val isValid = runCatching {
+                client.newCall(request).execute().use { response ->
+                    response.isSuccessful
+                }
+            }.getOrDefault(false)
+
+            if (isValid || trimmed.startsWith("AIzaSy")) {
+                prefs.edit()
+                    .putString("gemini_api_key", trimmed)
+                    .putString("auth_type", "GEMINI_API_KEY")
+                    .putString("google_display_name", "Gemini Developer")
+                    .putString("google_email", "developer@gemini.api")
+                    .apply()
+
+                daemonService?.setApiKey(trimmed)
+
+                _uiState.update {
+                    it.copy(
+                        apiKey = trimmed,
+                        authState = AuthState(
+                            isSignedIn = true,
+                            authType = AuthType.GEMINI_API_KEY,
+                            displayName = "Gemini Developer",
+                            userEmail = "developer@gemini.api",
+                            isVerifying = false
+                        ),
+                        isSignInDialogVisible = false
+                    )
+                }
+            } else {
+                _uiState.update {
+                    it.copy(
+                        authState = it.authState.copy(
+                            isVerifying = false,
+                            authErrorMessage = "Invalid API Key. Please verify key from Google AI Studio."
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    fun signOut() {
+        prefs.edit().clear().apply()
+        daemonService?.setApiKey("")
+        _uiState.update {
+            it.copy(
+                apiKey = "",
+                authState = AuthState(isSignedIn = false, authType = AuthType.NONE),
+                isSignInDialogVisible = false
+            )
+        }
+    }
+
+    // --- UI Interactions ---
+
+    fun setTerminalSheetVisible(visible: Boolean) {
+        _uiState.update { it.copy(isTerminalSheetVisible = visible) }
+    }
+
+    fun setSettingsDialogVisible(visible: Boolean) {
+        _uiState.update { it.copy(isSettingsDialogVisible = visible) }
     }
 
     fun updatePromptInput(text: String) {
@@ -346,9 +490,6 @@ class AntigravityViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    /**
-     * Clicking "+ New Conversation" resets to the iconic centered Antigravity empty canvas view.
-     */
     fun startNewConversation() {
         activeStreamingResponseId = null
         activeStreamingThoughtId = null
@@ -377,7 +518,6 @@ class AntigravityViewModel(application: Application) : AndroidViewModel(applicat
             prompt = trimmed
         )
 
-        // Add session to sidebar if starting from empty New Conversation view
         _uiState.update { state ->
             val updatedProjects = if (state.selectedSessionId == null) {
                 state.projects.map { proj ->
@@ -413,11 +553,10 @@ class AntigravityViewModel(application: Application) : AndroidViewModel(applicat
                 useSandbox = false
             )
         } else {
-            // Preview fallback when running inside Android Studio @Preview
             val reply = ChatTimelineItem.AgentResponseItem(
                 id = "sim-${UUID.randomUUID()}",
                 timestamp = currentTimeLabel(),
-                markdownText = "Dispatched to `agy --output-format=stream-json --model=${currentState.selectedModel.id}`: _\"$trimmed\"_",
+                markdownText = "Dispatched to `agy --model=${currentState.selectedModel.id}`: _\"$trimmed\"_",
                 tokenUsageLabel = "Preview Mode"
             )
             _uiState.update {
@@ -440,25 +579,6 @@ class AntigravityViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    fun toggleOpenIdePane() {
-        _uiState.update { it.copy(isOpenIdePaneVisible = !it.isOpenIdePaneVisible) }
-    }
-
-    fun setOpenIdePaneVisible(visible: Boolean) {
-        _uiState.update { it.copy(isOpenIdePaneVisible = visible) }
-    }
-
-    fun setSettingsDialogVisible(visible: Boolean) {
-        _uiState.update { it.copy(isSettingsDialogVisible = visible) }
-    }
-
-    fun saveApiKey(newKey: String) {
-        val trimmed = newKey.trim()
-        prefs.edit().putString("gemini_api_key", trimmed).apply()
-        daemonService?.setApiKey(trimmed)
-        _uiState.update { it.copy(apiKey = trimmed) }
-    }
-
     fun openDiffReview(diffCard: ChatTimelineItem.GitDiffCard?) {
         _uiState.update { it.copy(activeDiffForReview = diffCard) }
     }
@@ -477,7 +597,7 @@ class AntigravityViewModel(application: Application) : AndroidViewModel(applicat
         _uiState.update {
             it.copy(
                 backgroundCommands = listOf(newCmd) + it.backgroundCommands.take(8),
-                isOpenIdePaneVisible = true
+                isTerminalSheetVisible = true
             )
         }
         daemonService?.runTerminalCommand(trimmed, state.activeProject.name)

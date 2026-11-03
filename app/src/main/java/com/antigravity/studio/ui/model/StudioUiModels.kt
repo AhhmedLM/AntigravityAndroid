@@ -4,7 +4,7 @@ import com.antigravity.studio.process.AntigravityProcessManager
 import com.antigravity.studio.service.AgentDaemonService
 
 /**
- * State-driven UI models matching the exact Antigravity 2.0 interface and real `agy` CLI data.
+ * State-driven UI models for the Mobile & Tablet Antigravity Studio application.
  */
 data class WorkspaceProject(
     val id: String,
@@ -34,6 +34,21 @@ enum class CheckoutMode(val label: String) {
     WORKTREE_BRANCH("Worktree Branch"),
     REMOTE_CONTROL("Remote Control Daemon")
 }
+
+enum class AuthType {
+    NONE,
+    GOOGLE_ACCOUNT,
+    GEMINI_API_KEY
+}
+
+data class AuthState(
+    val isSignedIn: Boolean = false,
+    val authType: AuthType = AuthType.NONE,
+    val userEmail: String = "",
+    val displayName: String = "",
+    val isVerifying: Boolean = false,
+    val authErrorMessage: String? = null
+)
 
 sealed interface ChatTimelineItem {
     val id: String
@@ -93,9 +108,13 @@ data class AntigravityUiState(
     val daemonPid: Long = 14892L,
     val daemonPort: Int = 8765,
     val heapLimitMb: Int = 256,
+    val authState: AuthState = AuthState(),
+    val isSignInDialogVisible: Boolean = false,
+    val isTerminalSheetVisible: Boolean = false,
+    val isSettingsDialogVisible: Boolean = false,
     val projects: List<WorkspaceProject> = SampleStudioData.defaultProjects,
     val selectedProjectId: String = "proj-javakingdom",
-    val selectedSessionId: String? = null, // null = Clean Empty New Conversation view like the screenshot!
+    val selectedSessionId: String? = null,
     val realAgyConversationId: String? = null,
     val availableModels: List<AntigravityProcessManager.AgyModelOption> = SampleStudioData.defaultModels,
     val selectedModel: AntigravityProcessManager.AgyModelOption = SampleStudioData.defaultModels.first(),
@@ -106,8 +125,6 @@ data class AntigravityUiState(
     val chatTimeline: List<ChatTimelineItem> = emptyList(),
     val backgroundCommands: List<BackgroundCommandItem> = SampleStudioData.defaultCommands,
     val terminalLogs: List<String> = SampleStudioData.defaultTerminalLogs,
-    val isOpenIdePaneVisible: Boolean = false,
-    val isSettingsDialogVisible: Boolean = false,
     val apiKey: String = "",
     val detectedAuthUrl: String? = null,
     val activeDiffForReview: ChatTimelineItem.GitDiffCard? = null
