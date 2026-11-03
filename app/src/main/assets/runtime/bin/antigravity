@@ -1,0 +1,4 @@
+#!/system/bin/sh
+# Antigravity Headless CLI Daemon Wrapper
+DIR="$(cd "$(dirname "$0")" && pwd)"
+exec "$DIR/node" --max-old-space-size=256 "$DIR/../lib/antigravity-server.js" "$@"
