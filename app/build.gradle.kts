@@ -13,8 +13,8 @@ android {
         applicationId = "com.antigravity.studio"
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0-arm64"
+        versionCode = 2
+        versionName = "1.4.12-arm64"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -56,9 +56,9 @@ android {
         buildConfig = true
     }
 
-    // Prevent asset compression on embedded binaries and preserve JNI/native executable packaging
+    // Prevent double compression on the bundled cli_android_arm64.agypkg archive & binaries
     androidResources {
-        noCompress += listOf("node", "antigravity", "busybox", "bin", "tar", "gz", "js", "json", "sh")
+        noCompress += listOf("agypkg", "agy", "antigravity", "node", "busybox", "bin")
     }
 
     packaging {
@@ -90,14 +90,13 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material3:material3-window-size-class")
-    implementation("androidx.compose.material:material-icons-extended")
 
-    // Kotlin Coroutines & Serialization
+    // Kotlin Coroutines & Serialization (for real agy stream-json NDJSON parsing)
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
-    // OkHttp for Localhost WebSocket / HTTP IPC Client
+    // OkHttp for Auto-Updater Manifest Fetching & Local IPC
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     // Debug / Preview Tooling

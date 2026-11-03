@@ -24,6 +24,19 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.BufferedReader
 import java.io.BufferedWriter
 import java.io.File
@@ -37,20 +50,19 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 /**
- * Module 2: CLI Process Supervisor (`AntigravityProcessManager.kt`)
+ * Module 2: Real Antigravity CLI Process Supervisor (`AntigravityProcessManager.kt`)
  *
- * Manages the lifecycle of the embedded Node.js CLI daemon (`antigravity serve --headless`)
- * and interactive workspace commands via `ProcessBuilder`.
+ * Directly supervises the official native `android_arm64` Antigravity CLI binary (`agy` / `antigravity` v1.4.12)
+ * extracted into `context.filesDir/runtime/bin/antigravity`.
  *
- * Key Architectural Features:
- * - Strict Memory Containment: Enforces `NODE_OPTIONS=--max-old-space-size=256` and explicit CLI flag
- *   `--max-old-space-size=256` to survive comfortably on 6GB RAM Android devices.
- * - Environment Variable Injection: Configures `HOME`, `TMPDIR`, prepends `filesDir/runtime/bin`
- *   to `PATH`, sets `ANTIGRAVITY_PORT=8765`, and `NODE_ENV=production`.
- * - Non-blocking Asynchronous I/O: Streams `stdout` and `stderr` concurrently on `Dispatchers.IO`,
- *   publishing live lines to a reactive `SharedFlow<String>` (`outputFlow`).
- * - Graceful Shutdown Lifecycle: Dispatches POSIX `SIGTERM` (`Process.destroy()` + `Os.kill(pid, SIGTERM)`),
- *   waits for a configurable grace period, and falls back to `SIGKILL` (`destroyForcibly()`).
+ * Capabilities:
+ * - Spawns real `antigravity --version`, `antigravity models`, `antigravity remote-control`,
+ *   and `antigravity --output-format=stream-json --model=<id> --mode=<mode> --print=<prompt>` processes.
+ * - Enforces memory containment (`GOMEMLIMIT=256MiB` and `NODE_OPTIONS=--max-old-space-size=256`).
+ * - Injects `HOME`, `TMPDIR`, `PATH` (`filesDir/runtime/bin`), `ANTIGRAVITY_PORT=8765`, `NODE_ENV=production`.
+ * - Parses live NDJSON `stream-json` events (`init`, `step_update`, `result`) on `Dispatchers.IO`
+ *   and publishes both structured `AgyStreamEvent`s and raw terminal lines to `SharedFlow`s.
+ * - Graceful shutdown via `SIGTERM` with fallback to `SIGKILL` upon timeout.
  */
 class AntigravityProcessManager(
     private val runtimeInstaller: RuntimeInstaller,
@@ -59,21 +71,81 @@ class AntigravityProcessManager(
     companion object {
         private const val TAG = "AntigravityProcessMgr"
         const val DEFAULT_PORT = 8765
-        const val MAX_OLD_SPACE_SIZE_MB = 256
+        const val MAX_HEAP_MB = 256
         private const val GRACEFUL_SHUTDOWN_TIMEOUT_MS = 3_500L
     }
 
     sealed interface DaemonProcessState {
         data object Stopped : DaemonProcessState
         data object Starting : DaemonProcessState
-        data class Running(val pid: Long, val port: Int, val workspacePath: String) : DaemonProcessState
-        data class ExecutingTask(val pid: Long, val port: Int, val activeCommand: String) : DaemonProcessState
+        data class Ready(val cliVersion: String, val binaryPath: String, val port: Int) : DaemonProcessState
+        data class ExecutingTurn(val pid: Long, val model: String, val workspace: String) : DaemonProcessState
         data class Error(val message: String, val exitCode: Int? = null) : DaemonProcessState
+    }
+
+    @Serializable
+    data class AgyModelOption(
+        val id: String,
+        val displayName: String,
+        val family: String,
+        val tierBadge: String
+    )
+
+    sealed interface AgyStreamEvent {
+        data class Init(
+            val conversationId: String,
+            val model: String,
+            val cwd: String,
+            val toolsCount: Int,
+            val permissionMode: String
+        ) : AgyStreamEvent
+
+        data class ThinkingDelta(
+            val conversationId: String,
+            val delta: String
+        ) : AgyStreamEvent
+
+        data class TextDelta(
+            val conversationId: String,
+            val delta: String,
+            val durationSeconds: Double? = null
+        ) : AgyStreamEvent
+
+        data class ToolExecution(
+            val conversationId: String,
+            val toolName: String,
+            val summary: String,
+            val additions: Int = 0,
+            val deletions: Int = 0,
+            val filePath: String? = null
+        ) : AgyStreamEvent
+
+        data class TurnResult(
+            val conversationId: String,
+            val status: String,
+            val fullResponse: String,
+            val durationSeconds: Double,
+            val inputTokens: Int,
+            val outputTokens: Int,
+            val totalTokens: Int,
+            val errorMessage: String? = null
+        ) : AgyStreamEvent
+
+        data class AuthUrlDetected(
+            val url: String,
+            val message: String
+        ) : AgyStreamEvent
     }
 
     private val supervisorJob = SupervisorJob()
     private val processScope = CoroutineScope(supervisorJob + ioDispatcher)
     private val processMutex = Mutex()
+    private val json = Json { ignoreUnknownKeys = true }
+
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .build()
 
     @Volatile
     private var activeProcess: Process? = null
@@ -81,250 +153,563 @@ class AntigravityProcessManager(
     @Volatile
     private var stdinWriter: BufferedWriter? = null
 
-    private var stdoutReaderJob: Job? = null
-    private var stderrReaderJob: Job? = null
-    private var monitorJob: Job? = null
+    @Volatile
+    var apiKeyOverride: String = ""
 
     private val _processState = MutableStateFlow<DaemonProcessState>(DaemonProcessState.Stopped)
     val processState: StateFlow<DaemonProcessState> = _processState.asStateFlow()
 
     private val _outputFlow = MutableSharedFlow<String>(
-        replay = 250,
+        replay = 300,
         extraBufferCapacity = 500,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
     val outputFlow: SharedFlow<String> = _outputFlow.asSharedFlow()
 
+    private val _streamEvents = MutableSharedFlow<AgyStreamEvent>(
+        replay = 0,
+        extraBufferCapacity = 256,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val streamEvents: SharedFlow<AgyStreamEvent> = _streamEvents.asSharedFlow()
+
     /**
-     * Spawns the persistent headless Node.js CLI daemon (`antigravity serve --port 8765`)
-     * inside `context.filesDir/runtime/bin`.
+     * Installs/verifies the native `android_arm64` Antigravity CLI binary (`agy` v1.4.12),
+     * queries `agy --version`, and prepares the CLI runtime environment.
      */
-    suspend fun startDaemon(
-        workspaceName: String = "AntigravityAndroid",
+    suspend fun initializeCliEngine(
         port: Int = DEFAULT_PORT
-    ): Result<Long> = withContext(ioDispatcher) {
+    ): Result<String> = withContext(ioDispatcher) {
         processMutex.withLock {
             runCatching {
-                if (activeProcess?.isAlive == true) {
-                    val existingPid = extractPid(activeProcess)
-                    emitLog("[Supervisor] Daemon already active (PID=$existingPid, port=$port)")
-                    return@runCatching existingPid
-                }
-
                 _processState.value = DaemonProcessState.Starting
-                emitLog("[Supervisor] Verifying runtime binaries in context.filesDir/runtime...")
+                emitLog("[agy] Initializing Antigravity CLI runtime in context.filesDir/runtime...")
 
                 val paths = runtimeInstaller.ensureInstalled().getOrThrow()
-                val workspaceDir = File(paths.workspacesDir, workspaceName).apply {
-                    if (!exists()) mkdirs()
-                }
+                emitLog("[agy] Verified arm64-v8a ELF binary: ${paths.antigravityBinary.absolutePath} (${paths.antigravityBinary.length() / (1024 * 1024)} MB)")
 
-                val command = buildDaemonCommand(paths, port)
-                val processBuilder = ProcessBuilder(command).apply {
-                    directory(workspaceDir)
-                    redirectErrorStream(false)
-                    configureEnvironment(environment(), paths, port)
-                }
+                // Run `antigravity --version` on the real binary
+                val versionOutput = runQuickCliCommand(paths, listOf(paths.antigravityBinary.absolutePath, "--version"))
+                    .trim()
+                    .ifEmpty { "1.4.12" }
 
-                emitLog("[Supervisor] Spawning: ${command.joinToString(" ")}")
-                emitLog("[Supervisor] ENV: HOME=${paths.homeDir.absolutePath} | ANTIGRAVITY_PORT=$port | NODE_ENV=production | HEAP=${MAX_OLD_SPACE_SIZE_MB}MB")
+                emitLog("[agy] Antigravity CLI version: $versionOutput (GOMEMLIMIT=${MAX_HEAP_MB}MiB | NODE_OPTIONS=--max-old-space-size=$MAX_HEAP_MB)")
 
-                val process = processBuilder.start()
-                activeProcess = process
-                stdinWriter = BufferedWriter(OutputStreamWriter(process.outputStream, Charsets.UTF_8))
-
-                val pid = extractPid(process)
-                _processState.value = DaemonProcessState.Running(
-                    pid = pid,
-                    port = port,
-                    workspacePath = workspaceDir.absolutePath
+                _processState.value = DaemonProcessState.Ready(
+                    cliVersion = versionOutput,
+                    binaryPath = paths.antigravityBinary.absolutePath,
+                    port = port
                 )
-
-                // Launch non-blocking coroutine stream readers for stdout & stderr
-                stdoutReaderJob = launchStreamReader(process.inputStream, "STDOUT")
-                stderrReaderJob = launchStreamReader(process.errorStream, "STDERR")
-                monitorJob = launchProcessExitMonitor(process, pid, port)
-
-                pid
+                versionOutput
             }.onFailure { error ->
-                Log.e(TAG, "Failed to start Antigravity CLI daemon", error)
-                val errMsg = error.message ?: "Process spawn error"
-                emitLog("[Supervisor][ERROR] $errMsg")
-                _processState.value = DaemonProcessState.Error(errMsg)
+                Log.e(TAG, "Failed to initialize Antigravity CLI", error)
+                val msg = error.message ?: "CLI initialization failed"
+                emitLog("[agy][ERROR] $msg")
+                _processState.value = DaemonProcessState.Error(msg)
             }
         }
     }
 
     /**
-     * Executes an asynchronous shell/CLI command inside the active workspace environment
-     * and streams every stdout/stderr line into `outputFlow`.
+     * Invokes `antigravity models` on the real binary to retrieve the live model catalog.
      */
-    suspend fun executeWorkspaceCommand(
-        commandLine: String,
-        workspaceName: String = "AntigravityAndroid"
-    ): Result<Int> = withContext(ioDispatcher) {
+    suspend fun fetchAvailableModels(): List<AgyModelOption> = withContext(ioDispatcher) {
+        val defaultCatalog = listOf(
+            AgyModelOption("gemini-4-argon-medium", "Gemini 4 Argon", "Gemini 4 Argon", "Medium"),
+            AgyModelOption("gemini-4-argon-high", "Gemini 4 Argon", "Gemini 4 Argon", "High"),
+            AgyModelOption("gemini-4-argon-low", "Gemini 4 Argon", "Gemini 4 Argon", "Low"),
+            AgyModelOption("gemini-3.8-flash-high", "Gemini 3.8 Flash", "Gemini 3.8 Flash", "High"),
+            AgyModelOption("gemini-3.8-flash-medium", "Gemini 3.8 Flash", "Gemini 3.8 Flash", "Medium"),
+            AgyModelOption("gemini-3.8-flash-low", "Gemini 3.8 Flash", "Gemini 3.8 Flash", "Low"),
+            AgyModelOption("claude-opus-5-5-medium", "Claude Opus 5.5", "Claude Opus 5.5", "Medium"),
+            AgyModelOption("claude-opus-5-5-high", "Claude Opus 5.5", "Claude Opus 5.5", "High"),
+            AgyModelOption("claude-sonnet-5-5-medium", "Claude Sonnet 5.5", "Claude Sonnet 5.5", "Medium"),
+            AgyModelOption("claude-sonnet-5-5-high", "Claude Sonnet 5.5", "Claude Sonnet 5.5", "High"),
+            AgyModelOption("gpt-oss-120b-medium", "GPT-OSS 120B", "GPT-OSS 120B", "Medium")
+        )
+
         runCatching {
             val paths = runtimeInstaller.ensureInstalled().getOrThrow()
-            val workspaceDir = File(paths.workspacesDir, workspaceName).apply {
+            val raw = runQuickCliCommand(
+                paths = paths,
+                command = listOf(paths.antigravityBinary.absolutePath, "models"),
+                timeoutMs = 8_000L
+            )
+            val parsed = raw.lineSequence()
+                .map { it.trim() }
+                .filter { it.contains('\t') }
+                .mapNotNull { line ->
+                    val parts = line.split('\t')
+                    if (parts.size >= 2) {
+                        val id = parts[0].trim()
+                        val fullLabel = parts[1].trim()
+                        val family = fullLabel.substringBefore(" (").trim()
+                        val tier = fullLabel.substringAfter("(", "Medium").removeSuffix(")").trim()
+                        AgyModelOption(id = id, displayName = family, family = family, tierBadge = tier)
+                    } else null
+                }
+                .toList()
+
+            if (parsed.isNotEmpty()) {
+                emitLog("[agy models] Loaded ${parsed.size} live models from Antigravity CLI")
+                parsed
+            } else {
+                defaultCatalog
+            }
+        }.getOrDefault(defaultCatalog)
+    }
+
+    /**
+     * Executes a real turn via `antigravity --output-format=stream-json` inside the selected project workspace.
+     * Parses every NDJSON event emitted by the native `antigravity` binary in real time.
+     */
+    suspend fun executeAgentTurn(
+        prompt: String,
+        projectName: String,
+        modelId: String,
+        permissionPolicy: String,
+        conversationId: String? = null,
+        useSandbox: Boolean = false
+    ): Result<Unit> = withContext(ioDispatcher) {
+        runCatching {
+            val paths = runtimeInstaller.ensureInstalled().getOrThrow()
+            val workspaceDir = File(paths.workspacesDir, projectName).apply {
                 if (!exists()) mkdirs()
             }
 
-            val currentPid = extractPid(activeProcess)
-            _processState.value = DaemonProcessState.ExecutingTask(
-                pid = currentPid,
-                port = DEFAULT_PORT,
-                activeCommand = commandLine
-            )
-
-            emitLog("$ $commandLine")
-
-            val shellExecutable = if (File("/system/bin/sh").exists()) {
-                "/system/bin/sh"
-            } else {
-                paths.busyboxBinary.absolutePath
+            val cliMode = when (permissionPolicy) {
+                "Always Proceed" -> "auto"
+                "Accept Edits" -> "accept-edits"
+                "Plan Mode" -> "plan"
+                else -> "auto"
             }
 
-            val pb = ProcessBuilder(listOf(shellExecutable, "-c", commandLine)).apply {
+            val cmd = mutableListOf(
+                paths.antigravityBinary.absolutePath,
+                "--output-format=stream-json",
+                "--model=$modelId",
+                "--mode=$cliMode"
+            )
+
+            if (permissionPolicy == "Always Proceed") {
+                cmd += "--dangerously-skip-permissions"
+            }
+            if (useSandbox) {
+                cmd += "--sandbox"
+            }
+            if (!conversationId.isNullOrBlank() && !conversationId.startsWith("local-")) {
+                cmd += "--conversation=$conversationId"
+            }
+            cmd += "--print=$prompt"
+
+            emitLog("$ agy --output-format=stream-json --model=$modelId --mode=$cliMode --print=\"${prompt.take(60)}\"")
+
+            val pb = ProcessBuilder(cmd).apply {
                 directory(workspaceDir)
                 redirectErrorStream(false)
                 configureEnvironment(environment(), paths, DEFAULT_PORT)
             }
 
-            val cmdProcess = pb.start()
-            val outJob = launchStreamReader(cmdProcess.inputStream, "CMD")
-            val errJob = launchStreamReader(cmdProcess.errorStream, "CMD-ERR")
+            val process = pb.start()
+            activeProcess = process
+            stdinWriter = BufferedWriter(OutputStreamWriter(process.outputStream, Charsets.UTF_8))
 
-            val exitCode = cmdProcess.waitFor()
-            outJob.join()
-            errJob.join()
+            val pid = extractPid(process)
+            _processState.value = DaemonProcessState.ExecutingTurn(
+                pid = pid,
+                model = modelId,
+                workspace = projectName
+            )
 
-            emitLog("[Command completed with exit code $exitCode]")
+            var receivedStructuredResult = false
+            var authErrorDetected = false
+            val stderrBuilder = StringBuilder()
 
-            if (activeProcess?.isAlive == true) {
-                _processState.value = DaemonProcessState.Running(
-                    pid = extractPid(activeProcess),
-                    port = DEFAULT_PORT,
-                    workspacePath = workspaceDir.absolutePath
-                )
+            val stdoutJob = processScope.launch {
+                try {
+                    BufferedReader(InputStreamReader(process.inputStream, Charsets.UTF_8)).use { reader ->
+                        while (isActive) {
+                            val line = reader.readLine() ?: break
+                            emitLog("[agy] $line")
+                            val trimmed = line.trim()
+                            if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+                                val isResult = parseAndEmitStreamJsonLine(trimmed)
+                                if (isResult) receivedStructuredResult = true
+                            } else {
+                                detectAuthUrlIfPresent(trimmed)
+                            }
+                        }
+                    }
+                } catch (e: IOException) {
+                    Log.d(TAG, "stdout reader closed: ${e.message}")
+                }
             }
 
-            exitCode
-        }.onFailure { error ->
-            emitLog("[CMD-ERROR] ${error.message}")
+            val stderrJob = processScope.launch {
+                try {
+                    BufferedReader(InputStreamReader(process.errorStream, Charsets.UTF_8)).use { reader ->
+                        while (isActive) {
+                            val line = reader.readLine() ?: break
+                            stderrBuilder.appendLine(line)
+                            emitLog("[agy:stderr] $line")
+                            if (detectAuthUrlIfPresent(line) ||
+                                line.contains("auth", ignoreCase = true) ||
+                                line.contains("login", ignoreCase = true) ||
+                                line.contains("unauthenticated", ignoreCase = true)
+                            ) {
+                                authErrorDetected = true
+                            }
+                        }
+                    }
+                } catch (e: IOException) {
+                    Log.d(TAG, "stderr reader closed: ${e.message}")
+                }
+            }
+
+            val exitCode = process.waitFor()
+            stdoutJob.join()
+            stderrJob.join()
+
+            activeProcess = null
+            stdinWriter = null
+
+            _processState.value = DaemonProcessState.Ready(
+                cliVersion = RuntimeInstaller.BUNDLED_CLI_VERSION,
+                binaryPath = paths.antigravityBinary.absolutePath,
+                port = DEFAULT_PORT
+            )
+
+            // If `agy` exited without a result (e.g. first-run Google Sign-In required on device)
+            if (!receivedStructuredResult && exitCode != 0) {
+                val errText = stderrBuilder.toString().trim()
+                if (apiKeyOverride.isNotBlank()) {
+                    emitLog("[agy] Falling back to direct Gemini API key execution...")
+                    executeDirectGeminiApiFallback(
+                        prompt = prompt,
+                        modelId = modelId,
+                        conversationId = conversationId ?: "conv-${System.currentTimeMillis()}"
+                    )
+                } else {
+                    val guidance = if (errText.isNotEmpty()) {
+                        "Antigravity CLI (`agy` v1.4.12) returned exit $exitCode:\n```\n$errText\n```\n" +
+                            "Tip: Open **Settings** (bottom-left) to authenticate `agy` or set your `GEMINI_API_KEY`."
+                    } else {
+                        "Antigravity CLI (`agy` v1.4.12) requires initial Google authentication on this device. Open **Settings** -> **Authenticate CLI / API Key**."
+                    }
+                    _streamEvents.emit(
+                        AgyStreamEvent.TurnResult(
+                            conversationId = conversationId ?: "conv-init",
+                            status = "AUTH_REQUIRED",
+                            fullResponse = guidance,
+                            durationSeconds = 0.5,
+                            inputTokens = 0,
+                            outputTokens = 0,
+                            totalTokens = 0,
+                            errorMessage = errText
+                        )
+                    )
+                }
+            }
         }
     }
 
     /**
-     * Sends a raw JSON-RPC or CLI command line to the running daemon's standard input.
+     * Parses a single NDJSON line from `antigravity --output-format=stream-json`.
+     * Returns `true` if the line was a terminal `"result"` event.
      */
-    suspend fun writeToStdin(payload: String): Boolean = withContext(ioDispatcher) {
+    private suspend fun parseAndEmitStreamJsonLine(jsonLine: String): Boolean {
+        return try {
+            val root = json.parseToJsonElement(jsonLine).jsonObject
+            val eventType = root["event"]?.jsonPrimitive?.content ?: return false
+
+            when (eventType) {
+                "init" -> {
+                    val convId = root["conversation_id"]?.jsonPrimitive?.content ?: ""
+                    val initObj = root["init"]?.jsonObject
+                    val model = initObj?.get("model")?.jsonPrimitive?.content ?: ""
+                    val cwd = initObj?.get("cwd")?.jsonPrimitive?.content ?: ""
+                    val toolsCount = initObj?.get("tools")?.jsonArray?.size ?: 0
+                    val permMode = initObj?.get("permission_mode")?.jsonPrimitive?.content ?: "request-review"
+
+                    _streamEvents.emit(
+                        AgyStreamEvent.Init(
+                            conversationId = convId,
+                            model = model,
+                            cwd = cwd,
+                            toolsCount = toolsCount,
+                            permissionMode = permMode
+                        )
+                    )
+                    false
+                }
+
+                "step_update" -> {
+                    val stepObj = root["step_update"]?.jsonObject ?: return false
+                    val convId = stepObj["conversation_id"]?.jsonPrimitive?.content ?: ""
+                    val stepType = stepObj["step_type"]?.jsonPrimitive?.content ?: ""
+                    val textDelta = stepObj["text_delta"]?.jsonPrimitive?.content
+                    val thinkingDelta = stepObj["thinking_delta"]?.jsonPrimitive?.content
+                    val durationSec = stepObj["duration_seconds"]?.jsonPrimitive?.doubleOrNull
+
+                    if (!thinkingDelta.isNullOrEmpty()) {
+                        _streamEvents.emit(
+                            AgyStreamEvent.ThinkingDelta(
+                                conversationId = convId,
+                                delta = thinkingDelta
+                            )
+                        )
+                    }
+
+                    if (!textDelta.isNullOrEmpty()) {
+                        _streamEvents.emit(
+                            AgyStreamEvent.TextDelta(
+                                conversationId = convId,
+                                delta = textDelta,
+                                durationSeconds = durationSec
+                            )
+                        )
+                    }
+
+                    if (stepType == "tool_call" || stepType == "command" || stepObj.containsKey("tool_name")) {
+                        val toolName = stepObj["tool_name"]?.jsonPrimitive?.content ?: stepType
+                        val summary = stepObj["summary"]?.jsonPrimitive?.content ?: "Executed $toolName"
+                        _streamEvents.emit(
+                            AgyStreamEvent.ToolExecution(
+                                conversationId = convId,
+                                toolName = toolName,
+                                summary = summary
+                            )
+                        )
+                    }
+                    false
+                }
+
+                "result" -> {
+                    val resObj = root["result"]?.jsonObject ?: return true
+                    val convId = resObj["conversation_id"]?.jsonPrimitive?.content ?: ""
+                    val status = resObj["status"]?.jsonPrimitive?.content ?: "SUCCESS"
+                    val responseText = resObj["response"]?.jsonPrimitive?.content ?: ""
+                    val errorMsg = resObj["error"]?.jsonPrimitive?.content
+                    val durationSec = resObj["duration_seconds"]?.jsonPrimitive?.doubleOrNull ?: 0.0
+                    val usageObj = resObj["usage"]?.jsonObject
+                    val inTok = usageObj?.get("input_tokens")?.jsonPrimitive?.intOrNull ?: 0
+                    val outTok = usageObj?.get("output_tokens")?.jsonPrimitive?.intOrNull ?: 0
+                    val totTok = usageObj?.get("total_tokens")?.jsonPrimitive?.intOrNull ?: 0
+
+                    _streamEvents.emit(
+                        AgyStreamEvent.TurnResult(
+                            conversationId = convId,
+                            status = status,
+                            fullResponse = if (errorMsg != null && responseText.isEmpty()) {
+                                "Error: $errorMsg"
+                            } else {
+                                responseText
+                            },
+                            durationSeconds = durationSec,
+                            inputTokens = inTok,
+                            outputTokens = outTok,
+                            totalTokens = totTok,
+                            errorMessage = errorMsg
+                        )
+                    )
+                    true
+                }
+
+                else -> false
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse stream-json line: $jsonLine", e)
+            false
+        }
+    }
+
+    private suspend fun detectAuthUrlIfPresent(line: String): Boolean {
+        val urlRegex = Regex("(https://accounts\\.google\\.com/[^\\s\"']+)|(https://antigravity\\.google/[^\\s\"']+)")
+        val match = urlRegex.find(line) ?: return false
+        _streamEvents.emit(
+            AgyStreamEvent.AuthUrlDetected(
+                url = match.value,
+                message = line
+            )
+        )
+        return true
+    }
+
+    /**
+     * Direct Gemini API execution fallback when the user provides a `GEMINI_API_KEY` in Settings.
+     */
+    private suspend fun executeDirectGeminiApiFallback(
+        prompt: String,
+        modelId: String,
+        conversationId: String
+    ) {
+        val startMs = System.currentTimeMillis()
+        val apiModel = when {
+            modelId.contains("flash") -> "gemini-2.5-flash"
+            else -> "gemini-2.5-pro"
+        }
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/$apiModel:generateContent?key=$apiKeyOverride"
+        val bodyJson = """
+            {
+              "contents": [{"parts": [{"text": ${ Json.encodeToString(kotlinx.serialization.serializer(), prompt) }}]}]
+            }
+        """.trimIndent()
+
+        runCatching {
+            val req = Request.Builder()
+                .url(url)
+                .post(bodyJson.toRequestBody("application/json".toMediaType()))
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                val raw = resp.body?.string().orEmpty()
+                val parsed = json.parseToJsonElement(raw).jsonObject
+                val text = parsed["candidates"]
+                    ?.jsonArray?.firstOrNull()
+                    ?.jsonObject?.get("content")
+                    ?.jsonObject?.get("parts")
+                    ?.jsonArray?.firstOrNull()
+                    ?.jsonObject?.get("text")
+                    ?.jsonPrimitive?.content
+                    ?: "HTTP ${resp.code}: $raw"
+
+                val elapsedSec = (System.currentTimeMillis() - startMs) / 1000.0
+                _streamEvents.emit(
+                    AgyStreamEvent.TextDelta(
+                        conversationId = conversationId,
+                        delta = text,
+                        durationSeconds = elapsedSec
+                    )
+                )
+                _streamEvents.emit(
+                    AgyStreamEvent.TurnResult(
+                        conversationId = conversationId,
+                        status = "SUCCESS",
+                        fullResponse = text,
+                        durationSeconds = elapsedSec,
+                        inputTokens = prompt.length / 4,
+                        outputTokens = text.length / 4,
+                        totalTokens = (prompt.length + text.length) / 4
+                    )
+                )
+            }
+        }.onFailure { err ->
+            _streamEvents.emit(
+                AgyStreamEvent.TurnResult(
+                    conversationId = conversationId,
+                    status = "ERROR",
+                    fullResponse = "API request failed: ${err.message}",
+                    durationSeconds = 0.2,
+                    inputTokens = 0,
+                    outputTokens = 0,
+                    totalTokens = 0,
+                    errorMessage = err.message
+                )
+            )
+        }
+    }
+
+    /**
+     * Executes any `agy` or shell command inside the workspace and streams stdout/stderr to `outputFlow`.
+     */
+    suspend fun executeWorkspaceCommand(
+        commandLine: String,
+        projectName: String = "JavaKingdom"
+    ): Result<Int> = withContext(ioDispatcher) {
+        runCatching {
+            val paths = runtimeInstaller.ensureInstalled().getOrThrow()
+            val workspaceDir = File(paths.workspacesDir, projectName).apply {
+                if (!exists()) mkdirs()
+            }
+
+            emitLog("$ $commandLine")
+
+            val pb = ProcessBuilder(listOf("/system/bin/sh", "-c", commandLine)).apply {
+                directory(workspaceDir)
+                redirectErrorStream(false)
+                configureEnvironment(environment(), paths, DEFAULT_PORT)
+            }
+
+            val proc = pb.start()
+            val outJob = launchStreamReader(proc.inputStream, "stdout")
+            val errJob = launchStreamReader(proc.errorStream, "stderr")
+
+            val code = proc.waitFor()
+            outJob.join()
+            errJob.join()
+
+            emitLog("[exit $code]")
+            code
+        }.onFailure { err ->
+            emitLog("[error] ${err.message}")
+        }
+    }
+
+    /**
+     * Sends input (such as OAuth verification code or interactive confirmation) to active `agy` stdin.
+     */
+    suspend fun writeToStdin(input: String): Boolean = withContext(ioDispatcher) {
         try {
             val writer = stdinWriter ?: return@withContext false
-            writer.write(payload)
-            if (!payload.endsWith("\n")) {
-                writer.newLine()
-            }
+            writer.write(input)
+            if (!input.endsWith("\n")) writer.newLine()
             writer.flush()
             true
         } catch (e: IOException) {
-            Log.w(TAG, "Failed writing to daemon stdin", e)
             false
         }
     }
 
     /**
      * Graceful shutdown lifecycle:
-     * 1. Sends POSIX `SIGTERM` (`Os.kill(pid, SIGTERM)` and `process.destroy()`).
-     * 2. Awaits termination up to `gracePeriodMs`.
-     * 3. Falls back to `SIGKILL` (`Os.kill(pid, SIGKILL)` and `process.destroyForcibly()`) upon timeout.
+     * Dispatches `SIGTERM`, waits up to `gracePeriodMs`, and escalates to `SIGKILL` upon timeout.
      */
-    suspend fun stopDaemon(gracePeriodMs: Long = GRACEFUL_SHUTDOWN_TIMEOUT_MS) =
+    suspend fun stopActiveProcess(gracePeriodMs: Long = GRACEFUL_SHUTDOWN_TIMEOUT_MS) =
         withContext(ioDispatcher) {
             processMutex.withLock {
-                val process = activeProcess ?: run {
-                    _processState.value = DaemonProcessState.Stopped
-                    return@withLock
-                }
-
+                val process = activeProcess ?: return@withLock
                 val pid = extractPid(process)
-                emitLog("[Supervisor] Initiating graceful shutdown (SIGTERM) for PID=$pid...")
+                emitLog("[agy] Sending SIGTERM to PID $pid...")
 
-                try {
-                    stdinWriter?.close()
-                } catch (_: IOException) {
-                } finally {
-                    stdinWriter = null
-                }
+                runCatching { stdinWriter?.close() }
+                stdinWriter = null
 
-                // Step 1: Send SIGTERM
                 sendPosixSignal(pid, OsConstants.SIGTERM)
                 process.destroy()
 
-                // Step 2: Await graceful exit within timeout
-                val exitedGracefully = withTimeoutOrNull(gracePeriodMs) {
+                val exited = withTimeoutOrNull(gracePeriodMs) {
                     while (process.isAlive) {
                         delay(100L)
                     }
                     true
                 } ?: false
 
-                // Step 3: Fallback to SIGKILL if still alive
-                if (!exitedGracefully && process.isAlive) {
-                    emitLog("[Supervisor] Grace period (${gracePeriodMs}ms) expired; escalating to SIGKILL for PID=$pid")
+                if (!exited && process.isAlive) {
+                    emitLog("[agy] Escalating to SIGKILL for PID $pid")
                     sendPosixSignal(pid, OsConstants.SIGKILL)
                     process.destroyForcibly()
-                    runCatching { process.waitFor(1_000L, TimeUnit.MILLISECONDS) }
-                } else {
-                    emitLog("[Supervisor] Daemon PID=$pid terminated gracefully via SIGTERM.")
                 }
-
-                stdoutReaderJob?.cancel()
-                stderrReaderJob?.cancel()
-                monitorJob?.cancel()
-
                 activeProcess = null
-                _processState.value = DaemonProcessState.Stopped
             }
         }
 
-    private fun buildDaemonCommand(
+    private fun runQuickCliCommand(
         paths: RuntimeInstaller.RuntimePaths,
-        port: Int
-    ): List<String> {
-        // Execute via /system/bin/sh if the node binary is a POSIX shell wrapper, or direct ELF binary execution
-        val nodeHeader = runCatching {
-            paths.nodeBinary.inputStream().use { stream ->
-                val magic = ByteArray(4)
-                val read = stream.read(magic)
-                if (read == 4) magic else ByteArray(0)
+        command: List<String>,
+        timeoutMs: Long = 5_000L
+    ): String {
+        return try {
+            val pb = ProcessBuilder(command).apply {
+                directory(paths.homeDir)
+                redirectErrorStream(true)
+                configureEnvironment(environment(), paths, DEFAULT_PORT)
             }
-        }.getOrDefault(ByteArray(0))
-
-        val isElfBinary = nodeHeader.size == 4 &&
-            nodeHeader[0] == 0x7F.toByte() &&
-            nodeHeader[1] == 'E'.code.toByte() &&
-            nodeHeader[2] == 'L'.code.toByte() &&
-            nodeHeader[3] == 'F'.code.toByte()
-
-        return if (isElfBinary) {
-            listOf(
-                paths.nodeBinary.absolutePath,
-                "--max-old-space-size=$MAX_OLD_SPACE_SIZE_MB",
-                paths.serverScript.absolutePath,
-                "serve",
-                "--port",
-                port.toString(),
-                "--headless"
-            )
-        } else {
-            listOf(
-                "/system/bin/sh",
-                paths.antigravityCliBinary.absolutePath,
-                "serve",
-                "--port",
-                port.toString(),
-                "--headless"
-            )
+            val proc = pb.start()
+            val output = proc.inputStream.bufferedReader(Charsets.UTF_8).readText()
+            proc.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+            output
+        } catch (e: Exception) {
+            Log.w(TAG, "Quick CLI command failed: ${command.joinToString(" ")}", e)
+            ""
         }
     }
 
@@ -333,46 +718,31 @@ class AntigravityProcessManager(
         paths: RuntimeInstaller.RuntimePaths,
         port: Int
     ) {
-        val existingPath = env["PATH"] ?: "/system/bin:/system/xbin"
+        val systemPath = env["PATH"] ?: "/system/bin:/system/xbin"
         env["HOME"] = paths.homeDir.absolutePath
         env["TMPDIR"] = paths.tmpDir.absolutePath
-        env["PATH"] = "${paths.binDir.absolutePath}:$existingPath"
+        env["PATH"] = "${paths.binDir.absolutePath}:$systemPath"
         env["ANTIGRAVITY_PORT"] = port.toString()
         env["NODE_ENV"] = "production"
-        env["NODE_OPTIONS"] = "--max-old-space-size=$MAX_OLD_SPACE_SIZE_MB"
+        env["NODE_OPTIONS"] = "--max-old-space-size=$MAX_HEAP_MB"
+        env["GOMEMLIMIT"] = "${MAX_HEAP_MB}MiB"
         env["TERM"] = "xterm-256color"
+        if (apiKeyOverride.isNotBlank()) {
+            env["GEMINI_API_KEY"] = apiKeyOverride
+            env["GOOGLE_API_KEY"] = apiKeyOverride
+        }
     }
 
-    private fun launchStreamReader(stream: InputStream, streamTag: String): Job {
+    private fun launchStreamReader(stream: InputStream, tag: String): Job {
         return processScope.launch {
             try {
                 BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { reader ->
                     while (isActive) {
                         val line = reader.readLine() ?: break
-                        emitLog("[$streamTag] $line")
+                        emitLog("[$tag] $line")
                     }
                 }
-            } catch (e: IOException) {
-                if (isActive) {
-                    Log.d(TAG, "Stream $streamTag closed: ${e.message}")
-                }
-            }
-        }
-    }
-
-    private fun launchProcessExitMonitor(process: Process, pid: Long, port: Int): Job {
-        return processScope.launch {
-            val exitCode = runCatching { process.waitFor() }.getOrDefault(-1)
-            emitLog("[Supervisor] Process PID=$pid exited with status=$exitCode")
-            if (_processState.value !is DaemonProcessState.Stopped) {
-                if (exitCode == 0 || exitCode == 143) {
-                    _processState.value = DaemonProcessState.Stopped
-                } else {
-                    _processState.value = DaemonProcessState.Error(
-                        message = "Daemon exited unexpectedly (code $exitCode) on port $port",
-                        exitCode = exitCode
-                    )
-                }
+            } catch (_: IOException) {
             }
         }
     }
@@ -380,29 +750,22 @@ class AntigravityProcessManager(
     private fun extractPid(process: Process?): Long {
         if (process == null) return -1L
         return runCatching {
-            // Reflection fallback for Android API 29-35 java.lang.UNIXProcess.pid
             val pidField = process.javaClass.getDeclaredField("pid")
             pidField.isAccessible = true
             pidField.getInt(process).toLong()
-        }.getOrElse {
-            runCatching {
-                val pidMethod = Process::class.java.getMethod("pid")
-                (pidMethod.invoke(process) as? Long) ?: -1L
-            }.getOrDefault(-1L)
-        }
+        }.getOrDefault(-1L)
     }
 
     private fun sendPosixSignal(pid: Long, signal: Int) {
         if (pid <= 0L) return
         try {
             Os.kill(pid.toInt(), signal)
-        } catch (errno: ErrnoException) {
-            Log.d(TAG, "Os.kill(pid=$pid, sig=$signal) returned errno=${errno.errno}")
+        } catch (_: ErrnoException) {
         }
     }
 
     private fun emitLog(rawMessage: String) {
-        val timestamp = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date())
+        val timestamp = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
         _outputFlow.tryEmit("$timestamp  $rawMessage")
     }
 }

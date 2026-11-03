@@ -2,6 +2,7 @@ package com.antigravity.studio.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,33 +20,24 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.Language
-import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -60,7 +52,6 @@ import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -77,33 +68,40 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.antigravity.studio.service.AgentDaemonService
+import com.antigravity.studio.process.AntigravityProcessManager
 import com.antigravity.studio.ui.model.AntigravityUiState
 import com.antigravity.studio.ui.model.BackgroundCommandItem
 import com.antigravity.studio.ui.model.ChatTimelineItem
+import com.antigravity.studio.ui.model.CheckoutMode
 import com.antigravity.studio.ui.model.CommandStatus
+import com.antigravity.studio.ui.model.ReviewPolicy
 import com.antigravity.studio.ui.model.WorkspaceProject
 import com.antigravity.studio.ui.theme.AntigravityPalette
 import com.antigravity.studio.ui.theme.AntigravityStudioTheme
 import kotlinx.coroutines.launch
 
 /**
- * Module 4: Adaptive Antigravity UI Layer (Jetpack Compose Material 3)
+ * Module 4: Exact Antigravity 2.0 Adaptive UI Layer (`AntigravityStudioScreen.kt`)
  *
- * Pure OLED Dark Theme (`#111215` Background, `#1A1B1E` Surfaces, `#2A2B2F` Borders)
- * with responsive layout switching via `WindowWidthSizeClass`:
- * - Phone (`Compact` / `Medium`): Collapsible Navigation Drawer for projects/sessions,
- *   single main chat pane, and a swipeable `ModalBottomSheet` for Terminal/Inspection logs.
- * - Tablet / Desktop (`Expanded`): Multi-Pane IDE layout:
- *   `[ Collapsible Projects Sidebar | Center Agent Chat Console | Right-hand Terminal & Tool Inspector ]`
+ * Matches the Antigravity 2.0 Desktop visual style 1:1 while adapting seamlessly
+ * between Phone (`Compact`/`Medium`) and Tablet/Desktop (`Expanded`) via `WindowWidthSizeClass`.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -111,22 +109,26 @@ fun AntigravityStudioScreen(
     uiState: AntigravityUiState,
     windowWidthSizeClass: WindowWidthSizeClass,
     onSelectProject: (String) -> Unit,
+    onSelectSession: (String, String) -> Unit,
     onNewConversation: () -> Unit,
     onPromptChange: (String) -> Unit,
     onSendPrompt: () -> Unit,
-    onSelectModel: (String) -> Unit,
-    onCyclePermissionPreset: () -> Unit,
+    onSelectModel: (AntigravityProcessManager.AgyModelOption) -> Unit,
+    onSelectReviewPolicy: (ReviewPolicy) -> Unit,
+    onSelectCheckoutMode: (CheckoutMode) -> Unit,
     onToggleThoughtExpanded: (String) -> Unit,
     onOpenDiffReview: (ChatTimelineItem.GitDiffCard?) -> Unit,
-    onSetInspectorVisible: (Boolean) -> Unit,
-    onTriggerQuickAction: (String) -> Unit,
+    onToggleOpenIdePane: () -> Unit,
+    onSetOpenIdePaneVisible: (Boolean) -> Unit,
+    onSetSettingsVisible: (Boolean) -> Unit,
+    onSaveApiKey: (String) -> Unit,
     onRunTerminalCommand: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val isExpanded = windowWidthSizeClass == WindowWidthSizeClass.Expanded
-    var isTabletSidebarCollapsed by remember { mutableStateOf(false) }
+    var isSidebarCollapsedOnTablet by remember { mutableStateOf(false) }
 
-    // Diff Review Modal Dialog when user taps "Review" on any Git Diff indicator
+    // Git Diff Review Modal
     uiState.activeDiffForReview?.let { diffCard ->
         GitDiffReviewDialog(
             diffCard = diffCard,
@@ -134,126 +136,158 @@ fun AntigravityStudioScreen(
         )
     }
 
-    if (isExpanded) {
-        // TABLET / EXPANDED MULTI-PANE IDE LAYOUT
-        Row(
-            modifier = modifier
-                .fillMaxSize()
-                .background(AntigravityPalette.BackgroundOled)
-        ) {
-            AnimatedVisibility(visible = !isTabletSidebarCollapsed) {
-                Row(modifier = Modifier.fillMaxHeight()) {
-                    ProjectsSidebarContent(
-                        uiState = uiState,
-                        onSelectProject = onSelectProject,
-                        onNewConversation = onNewConversation,
-                        modifier = Modifier
-                            .width(280.dp)
-                            .fillMaxHeight()
-                    )
-                    VerticalDivider(
-                        thickness = 1.dp,
-                        color = AntigravityPalette.BorderSubtle
-                    )
+    // Settings & Real Antigravity CLI Auth/Binary Modal
+    if (uiState.isSettingsDialogVisible) {
+        AntigravitySettingsDialog(
+            uiState = uiState,
+            onSaveApiKey = onSaveApiKey,
+            onRunCliCommand = onRunTerminalCommand,
+            onDismiss = { onSetSettingsVisible(false) }
+        )
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(AntigravityPalette.BackgroundOled)
+    ) {
+        // Top Window Menu Bar: Antigravity | Workspace | View | Window
+        AntigravityTopMenuBar(
+            cliVersion = uiState.cliVersion,
+            isExecuting = uiState.isExecutingTurn,
+            onOpenSettings = { onSetSettingsVisible(true) },
+            onToggleIde = onToggleOpenIdePane
+        )
+
+        HorizontalDivider(thickness = 1.dp, color = AntigravityPalette.BorderSubtle)
+
+        if (isExpanded) {
+            // TABLET / DESKTOP EXPANDED MULTI-PANE LAYOUT
+            Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                AnimatedVisibility(visible = !isSidebarCollapsedOnTablet) {
+                    Row(modifier = Modifier.fillMaxHeight()) {
+                        AntigravitySidebar(
+                            uiState = uiState,
+                            onToggleSidebar = { isSidebarCollapsedOnTablet = !isSidebarCollapsedOnTablet },
+                            onSelectProject = onSelectProject,
+                            onSelectSession = onSelectSession,
+                            onNewConversation = onNewConversation,
+                            onOpenSettings = { onSetSettingsVisible(true) },
+                            modifier = Modifier
+                                .width(252.dp)
+                                .fillMaxHeight()
+                        )
+                        VerticalDivider(thickness = 1.dp, color = AntigravityPalette.BorderSubtle)
+                    }
+                }
+
+                // Main Center Antigravity Canvas
+                AntigravityMainCanvas(
+                    uiState = uiState,
+                    showSidebarToggleInCanvas = isSidebarCollapsedOnTablet,
+                    onToggleSidebar = { isSidebarCollapsedOnTablet = !isSidebarCollapsedOnTablet },
+                    onToggleOpenIde = onToggleOpenIdePane,
+                    onSelectProject = onSelectProject,
+                    onPromptChange = onPromptChange,
+                    onSendPrompt = onSendPrompt,
+                    onSelectModel = onSelectModel,
+                    onSelectReviewPolicy = onSelectReviewPolicy,
+                    onSelectCheckoutMode = onSelectCheckoutMode,
+                    onToggleThoughtExpanded = onToggleThoughtExpanded,
+                    onOpenDiffReview = onOpenDiffReview,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                )
+
+                // Right-hand IDE / Terminal & Inspector Pane (toggled by "Open IDE")
+                AnimatedVisibility(visible = uiState.isOpenIdePaneVisible) {
+                    Row(modifier = Modifier.fillMaxHeight()) {
+                        VerticalDivider(thickness = 1.dp, color = AntigravityPalette.BorderSubtle)
+                        OpenIdeInspectorPane(
+                            uiState = uiState,
+                            onRunTerminalCommand = onRunTerminalCommand,
+                            modifier = Modifier
+                                .width(360.dp)
+                                .fillMaxHeight()
+                        )
+                    }
                 }
             }
+        } else {
+            // PHONE COMPACT LAYOUT: Collapsible Sidebar Drawer + Center Canvas + ModalBottomSheet IDE
+            val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+            val scope = rememberCoroutineScope()
+            val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
 
-            // Center Workspace Chat Console
-            WorkspaceChatConsole(
-                uiState = uiState,
-                isExpandedLayout = true,
-                onToggleSidebarOrDrawer = { isTabletSidebarCollapsed = !isTabletSidebarCollapsed },
-                onOpenInspectorSheet = { onSetInspectorVisible(true) },
-                onPromptChange = onPromptChange,
-                onSendPrompt = onSendPrompt,
-                onSelectModel = onSelectModel,
-                onCyclePermissionPreset = onCyclePermissionPreset,
-                onToggleThoughtExpanded = onToggleThoughtExpanded,
-                onOpenDiffReview = onOpenDiffReview,
-                onTriggerQuickAction = onTriggerQuickAction,
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-            )
-
-            VerticalDivider(
-                thickness = 1.dp,
-                color = AntigravityPalette.BorderSubtle
-            )
-
-            // Right-hand Terminal & Tool Inspector Pane
-            InspectorAndTerminalPane(
-                uiState = uiState,
-                onTriggerQuickAction = onTriggerQuickAction,
-                onRunTerminalCommand = onRunTerminalCommand,
-                modifier = Modifier
-                    .width(360.dp)
-                    .fillMaxHeight()
-            )
-        }
-    } else {
-        // PHONE / COMPACT LAYOUT: ModalNavigationDrawer + Main Chat Pane + ModalBottomSheet
-        val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
-        val coroutineScope = rememberCoroutineScope()
-        val bottomSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
-
-        ModalNavigationDrawer(
-            drawerState = drawerState,
-            drawerContent = {
-                ModalDrawerSheet(
-                    drawerContainerColor = AntigravityPalette.SurfaceDark,
-                    drawerContentColor = AntigravityPalette.TextPrimary,
-                    modifier = Modifier.width(300.dp)
-                ) {
-                    ProjectsSidebarContent(
-                        uiState = uiState,
-                        onSelectProject = { projectId ->
-                            onSelectProject(projectId)
-                            coroutineScope.launch { drawerState.close() }
-                        },
-                        onNewConversation = {
-                            onNewConversation()
-                            coroutineScope.launch { drawerState.close() }
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-            }
-        ) {
-            WorkspaceChatConsole(
-                uiState = uiState,
-                isExpandedLayout = false,
-                onToggleSidebarOrDrawer = {
-                    coroutineScope.launch {
-                        if (drawerState.isClosed) drawerState.open() else drawerState.close()
+            ModalNavigationDrawer(
+                drawerState = drawerState,
+                drawerContent = {
+                    ModalDrawerSheet(
+                        drawerContainerColor = AntigravityPalette.SidebarBg,
+                        drawerContentColor = AntigravityPalette.TextPrimary,
+                        modifier = Modifier.width(276.dp)
+                    ) {
+                        AntigravitySidebar(
+                            uiState = uiState,
+                            onToggleSidebar = { scope.launch { drawerState.close() } },
+                            onSelectProject = { projId ->
+                                onSelectProject(projId)
+                                scope.launch { drawerState.close() }
+                            },
+                            onSelectSession = { projId, sessId ->
+                                onSelectSession(projId, sessId)
+                                scope.launch { drawerState.close() }
+                            },
+                            onNewConversation = {
+                                onNewConversation()
+                                scope.launch { drawerState.close() }
+                            },
+                            onOpenSettings = {
+                                scope.launch { drawerState.close() }
+                                onSetSettingsVisible(true)
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
                     }
                 },
-                onOpenInspectorSheet = { onSetInspectorVisible(true) },
-                onPromptChange = onPromptChange,
-                onSendPrompt = onSendPrompt,
-                onSelectModel = onSelectModel,
-                onCyclePermissionPreset = onCyclePermissionPreset,
-                onToggleThoughtExpanded = onToggleThoughtExpanded,
-                onOpenDiffReview = onOpenDiffReview,
-                onTriggerQuickAction = onTriggerQuickAction,
-                modifier = Modifier.fillMaxSize()
-            )
+                modifier = Modifier.weight(1f)
+            ) {
+                AntigravityMainCanvas(
+                    uiState = uiState,
+                    showSidebarToggleInCanvas = true,
+                    onToggleSidebar = {
+                        scope.launch {
+                            if (drawerState.isClosed) drawerState.open() else drawerState.close()
+                        }
+                    },
+                    onToggleOpenIde = onToggleOpenIdePane,
+                    onSelectProject = onSelectProject,
+                    onPromptChange = onPromptChange,
+                    onSendPrompt = onSendPrompt,
+                    onSelectModel = onSelectModel,
+                    onSelectReviewPolicy = onSelectReviewPolicy,
+                    onSelectCheckoutMode = onSelectCheckoutMode,
+                    onToggleThoughtExpanded = onToggleThoughtExpanded,
+                    onOpenDiffReview = onOpenDiffReview,
+                    modifier = Modifier.fillMaxSize()
+                )
 
-            if (uiState.isInspectorSheetVisible) {
-                ModalBottomSheet(
-                    onDismissRequest = { onSetInspectorVisible(false) },
-                    sheetState = bottomSheetState,
-                    containerColor = AntigravityPalette.SurfaceDark,
-                    contentColor = AntigravityPalette.TextPrimary
-                ) {
-                    InspectorAndTerminalPane(
-                        uiState = uiState,
-                        onTriggerQuickAction = onTriggerQuickAction,
-                        onRunTerminalCommand = onRunTerminalCommand,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(520.dp)
-                    )
+                if (uiState.isOpenIdePaneVisible) {
+                    ModalBottomSheet(
+                        onDismissRequest = { onSetOpenIdePaneVisible(false) },
+                        sheetState = sheetState,
+                        containerColor = AntigravityPalette.SidebarBg,
+                        contentColor = AntigravityPalette.TextPrimary
+                    ) {
+                        OpenIdeInspectorPane(
+                            uiState = uiState,
+                            onRunTerminalCommand = onRunTerminalCommand,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(500.dp)
+                        )
+                    }
                 }
             }
         }
@@ -261,229 +295,361 @@ fun AntigravityStudioScreen(
 }
 
 /**
- * Component 1: Projects Drawer / Sidebar
- * Includes "+ New Conversation" button, project hierarchy with active status dots,
- * Automations, Customizations, and Settings items.
+ * Top Window Menu Bar (`Antigravity   Workspace   View   Window`) matching the screenshot.
  */
 @Composable
-fun ProjectsSidebarContent(
+private fun AntigravityTopMenuBar(
+    cliVersion: String,
+    isExecuting: Boolean,
+    onOpenSettings: () -> Unit,
+    onToggleIde: () -> Unit
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(28.dp)
+            .background(AntigravityPalette.TopBarBg)
+            .padding(horizontal = 12.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text(
+                text = "Antigravity",
+                fontSize = 11.5.sp,
+                color = AntigravityPalette.TextSecondary,
+                modifier = Modifier.clickable(onClick = onOpenSettings)
+            )
+            Text(
+                text = "Workspace",
+                fontSize = 11.5.sp,
+                color = AntigravityPalette.TextSecondary,
+                modifier = Modifier.clickable(onClick = onToggleIde)
+            )
+            Text(
+                text = "View",
+                fontSize = 11.5.sp,
+                color = AntigravityPalette.TextSecondary,
+                modifier = Modifier.clickable(onClick = onToggleIde)
+            )
+            Text(
+                text = "Window",
+                fontSize = 11.5.sp,
+                color = AntigravityPalette.TextSecondary
+            )
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (isExecuting) AntigravityPalette.AccentBlueDot
+                        else AntigravityPalette.StatusActiveGreen
+                    )
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "agy v$cliVersion",
+                fontSize = 10.5.sp,
+                fontFamily = FontFamily.Monospace,
+                color = AntigravityPalette.TextMuted
+            )
+        }
+    }
+}
+
+/**
+ * Left Sidebar matching the screenshot 1:1:
+ * - Header: Antigravity 'A' Logo | Sidebar Toggle | Back | Forward | Search
+ * - `+ New Conversation` dark neutral button (`#25262B`)
+ * - `Automations` & `Customizations`
+ * - `Projects` section with filter & new folder icons
+ * - Folder + Indented Conversation rows with timestamps (`5mo`, `6mo`) or blue active dot (`#3B82F6`)
+ * - Bottom pinned `Settings`
+ */
+@Composable
+fun AntigravitySidebar(
     uiState: AntigravityUiState,
+    onToggleSidebar: () -> Unit,
     onSelectProject: (String) -> Unit,
+    onSelectSession: (String, String) -> Unit,
     onNewConversation: () -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
         modifier = modifier
-            .background(AntigravityPalette.SurfaceDark)
-            .padding(14.dp)
+            .background(AntigravityPalette.SidebarBg)
+            .padding(horizontal = 12.dp, vertical = 10.dp)
     ) {
-        // Brand Header + Engine Daemon Pill
+        // Top Header Icon Row: [A Logo] [Sidebar Toggle] [<-] [->] [Search]
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp, vertical = 4.dp)
+        ) {
+            AntigravityArchLogo(modifier = Modifier.size(18.dp))
+
+            SidebarToggleIcon(
+                modifier = Modifier
+                    .size(16.dp)
+                    .clickable(onClick = onToggleSidebar)
+            )
+
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "Back",
+                tint = AntigravityPalette.TextMuted,
+                modifier = Modifier.size(15.dp)
+            )
+
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                contentDescription = "Forward",
+                tint = AntigravityPalette.TextMuted,
+                modifier = Modifier.size(15.dp)
+            )
+
+            Icon(
+                imageVector = Icons.Default.Search,
+                contentDescription = "Search",
+                tint = AntigravityPalette.TextSecondary,
+                modifier = Modifier.size(16.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // "+ New Conversation" Button (#25262B pill, exact match to screenshot)
+        Surface(
+            color = AntigravityPalette.NewConvoButtonBg,
+            shape = RoundedCornerShape(8.dp),
+            border = BorderStroke(1.dp, AntigravityPalette.NewConvoButtonBorder),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(36.dp)
+                .clickable(onClick = onNewConversation)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 12.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = null,
+                    tint = AntigravityPalette.TextSecondary,
+                    modifier = Modifier.size(15.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "New Conversation",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = AntigravityPalette.TextPrimary
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Automations & Customizations rows
+        SidebarNavRow(
+            iconType = "clock",
+            label = "Automations",
+            onClick = {}
+        )
+        SidebarNavRow(
+            iconType = "toolbox",
+            label = "Customizations",
+            onClick = {}
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+        HorizontalDivider(thickness = 1.dp, color = AntigravityPalette.BorderSubtle)
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // "Projects" Header with Filter + New Folder icons
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 12.dp)
+                .padding(horizontal = 4.dp, vertical = 4.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .size(30.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(AntigravityPalette.AccentPrimary.copy(alpha = 0.18f))
-                        .border(1.dp, AntigravityPalette.AccentPrimary, RoundedCornerShape(8.dp))
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.AutoAwesome,
-                        contentDescription = null,
-                        tint = AntigravityPalette.AccentPrimary,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(10.dp))
-                Column {
-                    Text(
-                        text = "Antigravity Studio",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "arm64-v8a • Node :${uiState.daemonPort}",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontSize = 11.sp,
-                        color = AntigravityPalette.TextSecondary
-                    )
-                }
-            }
-
-            StatusDot(
-                color = when (uiState.engineStatus) {
-                    AgentDaemonService.EngineStatus.LISTENING -> AntigravityPalette.StatusActiveGreen
-                    AgentDaemonService.EngineStatus.EXECUTING_TASK -> AntigravityPalette.AccentCyan
-                    AgentDaemonService.EngineStatus.STARTING -> AntigravityPalette.StatusWarningAmber
-                    AgentDaemonService.EngineStatus.ERROR -> AntigravityPalette.StatusErrorRed
-                }
-            )
-        }
-
-        // "+ New Conversation" Action Button
-        Button(
-            onClick = onNewConversation,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = AntigravityPalette.AccentPrimary,
-                contentColor = Color.White
-            ),
-            shape = RoundedCornerShape(10.dp),
-            contentPadding = PaddingValues(vertical = 10.dp, horizontal = 14.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Icon(
-                imageVector = Icons.Default.Add,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = "+ New Conversation",
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 13.sp
+                text = "Projects",
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.Medium,
+                color = AntigravityPalette.TextMuted
             )
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = "WORKSPACES & SESSIONS",
-            style = MaterialTheme.typography.labelMedium,
-            fontSize = 11.sp,
-            color = AntigravityPalette.TextMuted,
-            modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
-        )
-
-        // Project Hierarchy List
-        LazyColumn(
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.weight(1f)
-        ) {
-            items(uiState.projects, key = { it.id }) { project ->
-                ProjectHierarchyItem(
-                    project = project,
-                    onClick = { onSelectProject(project.id) }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                FilterLinesIcon(modifier = Modifier.size(13.dp))
+                FolderOutlineIcon(
+                    color = AntigravityPalette.TextMuted,
+                    modifier = Modifier.size(14.dp)
                 )
             }
         }
 
-        HorizontalDivider(
-            color = AntigravityPalette.BorderSubtle,
-            modifier = Modifier.padding(vertical = 10.dp)
-        )
+        Spacer(modifier = Modifier.height(6.dp))
 
-        // Bottom Navigation Items: Automations, Customizations, Settings
-        SidebarFooterItem(
-            icon = Icons.Default.Schedule,
-            title = "Automations",
-            badge = "Cron • 2"
-        )
-        SidebarFooterItem(
-            icon = Icons.Default.Tune,
-            title = "Customizations",
-            badge = "Skills • MCP"
-        )
-        SidebarFooterItem(
-            icon = Icons.Default.Settings,
-            title = "Settings",
-            badge = "Heap ${uiState.heapLimitMb}MB"
+        // Scrollable Projects & Indented Sessions List
+        LazyColumn(
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.weight(1f)
+        ) {
+            items(uiState.projects, key = { it.id }) { project ->
+                SidebarProjectGroup(
+                    project = project,
+                    selectedSessionId = uiState.selectedSessionId,
+                    onSelectProject = { onSelectProject(project.id) },
+                    onSelectSession = { sessId -> onSelectSession(project.id, sessId) }
+                )
+            }
+        }
+
+        HorizontalDivider(thickness = 1.dp, color = AntigravityPalette.BorderSubtle)
+        Spacer(modifier = Modifier.height(6.dp))
+
+        // Bottom Pinned "Settings" Item
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(6.dp))
+                .clickable(onClick = onOpenSettings)
+                .padding(horizontal = 6.dp, vertical = 8.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Settings,
+                contentDescription = "Settings",
+                tint = AntigravityPalette.TextSecondary,
+                modifier = Modifier.size(15.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = "Settings",
+                fontSize = 13.sp,
+                color = AntigravityPalette.TextSecondary
+            )
+        }
+    }
+}
+
+@Composable
+private fun SidebarNavRow(
+    iconType: String,
+    label: String,
+    onClick: () -> Unit
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 7.dp)
+    ) {
+        if (iconType == "clock") {
+            ClockOutlineIcon(
+                color = AntigravityPalette.TextSecondary,
+                modifier = Modifier.size(15.dp)
+            )
+        } else {
+            ToolboxOutlineIcon(
+                color = AntigravityPalette.TextSecondary,
+                modifier = Modifier.size(15.dp)
+            )
+        }
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = label,
+            fontSize = 13.sp,
+            color = AntigravityPalette.TextSecondary
         )
     }
 }
 
 @Composable
-private fun ProjectHierarchyItem(
+private fun SidebarProjectGroup(
     project: WorkspaceProject,
-    onClick: () -> Unit
+    selectedSessionId: String?,
+    onSelectProject: () -> Unit,
+    onSelectSession: (String) -> Unit
 ) {
-    val borderColor = if (project.isActive) {
-        AntigravityPalette.AccentPrimary.copy(alpha = 0.6f)
-    } else {
-        AntigravityPalette.BorderSubtle
-    }
-    val containerColor = if (project.isActive) {
-        AntigravityPalette.SurfaceElevated
-    } else {
-        AntigravityPalette.BackgroundOled.copy(alpha = 0.6f)
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(containerColor)
-            .border(1.dp, borderColor, RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
-            .padding(10.dp)
-    ) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        // Folder Row: [Folder Icon] JavaKingdom
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(6.dp))
+                .clickable(onClick = onSelectProject)
+                .padding(horizontal = 4.dp, vertical = 3.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                StatusDot(
-                    color = if (project.isActive) {
-                        AntigravityPalette.StatusActiveGreen
-                    } else {
-                        AntigravityPalette.TextMuted
-                    }
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Icon(
-                    imageVector = Icons.Default.Folder,
-                    contentDescription = null,
-                    tint = if (project.isActive) AntigravityPalette.AccentPrimary else AntigravityPalette.TextSecondary,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = project.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
+            FolderOutlineIcon(
+                color = if (project.isActive) AntigravityPalette.TextPrimary else AntigravityPalette.TextMuted,
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = project.branch,
-                style = MaterialTheme.typography.labelMedium,
-                fontSize = 10.sp,
-                color = AntigravityPalette.AccentCyan
+                text = project.name,
+                fontSize = 13.sp,
+                color = if (project.isActive) AntigravityPalette.TextPrimary else AntigravityPalette.TextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
 
-        if (project.sessions.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(6.dp))
-            project.sessions.forEach { session ->
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 16.dp, top = 3.dp, bottom = 3.dp)
-                ) {
-                    Text(
-                        text = "• ${session.title}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (session.isRunning) AntigravityPalette.TextPrimary else AntigravityPalette.TextSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
+        // Indented Session Rows underneath folder
+        project.sessions.forEach { session ->
+            val isSelected = session.id == selectedSessionId
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 14.dp, top = 2.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(
+                        if (isSelected) AntigravityPalette.SurfaceElevated
+                        else Color.Transparent
                     )
-                    Spacer(modifier = Modifier.width(6.dp))
+                    .clickable { onSelectSession(session.id) }
+                    .padding(horizontal = 8.dp, vertical = 5.dp)
+            ) {
+                Text(
+                    text = session.title,
+                    fontSize = 13.sp,
+                    color = AntigravityPalette.TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                if (session.hasActiveDot) {
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(AntigravityPalette.AccentBlueDot)
+                    )
+                } else if (session.updatedAt.isNotEmpty()) {
                     Text(
                         text = session.updatedAt,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontSize = 10.sp,
+                        fontSize = 11.5.sp,
                         color = AntigravityPalette.TextMuted
                     )
                 }
@@ -492,114 +658,179 @@ private fun ProjectHierarchyItem(
     }
 }
 
-@Composable
-private fun SidebarFooterItem(
-    icon: ImageVector,
-    title: String,
-    badge: String
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .clickable { }
-            .padding(horizontal = 8.dp, vertical = 7.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = AntigravityPalette.TextSecondary,
-                modifier = Modifier.size(17.dp)
-            )
-            Spacer(modifier = Modifier.width(10.dp))
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodyMedium,
-                color = AntigravityPalette.TextPrimary
-            )
-        }
-        Text(
-            text = badge,
-            style = MaterialTheme.typography.labelMedium,
-            fontSize = 10.sp,
-            color = AntigravityPalette.TextSecondary,
-            modifier = Modifier
-                .clip(RoundedCornerShape(6.dp))
-                .background(AntigravityPalette.SurfaceElevated)
-                .border(1.dp, AntigravityPalette.BorderSubtle, RoundedCornerShape(6.dp))
-                .padding(horizontal = 6.dp, vertical = 2.dp)
-        )
-    }
-}
-
 /**
- * Component 2: Workspace Chat Console
- * Includes Project title path breadcrumb, agent thought cards ("Worked for 21s"),
- * git diff indicators (`+30 -6`) with Review buttons, and a bottom floating prompt bar
- * (model selector dropdown, permission presets, action triggers).
+ * Main Antigravity Canvas (`#0E0E10` background):
+ * - Top-right `⋮` + `Open IDE` button
+ * - When in New Conversation state (`chatTimeline.isEmpty()`): Centers the project selector (`📁 JavaKingdom ⌄`)
+ *   and the iconic `AntigravityPromptComposerCard` in the middle of the screen!
+ * - When a conversation is active: Displays the conversation timeline above and docks the prompt card below.
  */
 @Composable
-fun WorkspaceChatConsole(
+fun AntigravityMainCanvas(
     uiState: AntigravityUiState,
-    isExpandedLayout: Boolean,
-    onToggleSidebarOrDrawer: () -> Unit,
-    onOpenInspectorSheet: () -> Unit,
+    showSidebarToggleInCanvas: Boolean,
+    onToggleSidebar: () -> Unit,
+    onToggleOpenIde: () -> Unit,
+    onSelectProject: (String) -> Unit,
     onPromptChange: (String) -> Unit,
     onSendPrompt: () -> Unit,
-    onSelectModel: (String) -> Unit,
-    onCyclePermissionPreset: () -> Unit,
+    onSelectModel: (AntigravityProcessManager.AgyModelOption) -> Unit,
+    onSelectReviewPolicy: (ReviewPolicy) -> Unit,
+    onSelectCheckoutMode: (CheckoutMode) -> Unit,
     onToggleThoughtExpanded: (String) -> Unit,
     onOpenDiffReview: (ChatTimelineItem.GitDiffCard) -> Unit,
-    onTriggerQuickAction: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Scaffold(
-        containerColor = AntigravityPalette.BackgroundOled,
-        topBar = {
-            WorkspaceHeaderBreadcrumbBar(
-                uiState = uiState,
-                isExpandedLayout = isExpandedLayout,
-                onToggleSidebarOrDrawer = onToggleSidebarOrDrawer,
-                onOpenInspectorSheet = onOpenInspectorSheet
-            )
-        },
-        bottomBar = {
-            FloatingAgentPromptBar(
-                uiState = uiState,
-                onPromptChange = onPromptChange,
-                onSendPrompt = onSendPrompt,
-                onSelectModel = onSelectModel,
-                onCyclePermissionPreset = onCyclePermissionPreset,
-                onTriggerQuickAction = onTriggerQuickAction
-            )
-        },
+    Box(
         modifier = modifier
-    ) { innerPadding ->
-        LazyColumn(
-            contentPadding = PaddingValues(
-                start = 16.dp,
-                end = 16.dp,
-                top = innerPadding.calculateTopPadding() + 12.dp,
-                bottom = innerPadding.calculateBottomPadding() + 16.dp
-            ),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.fillMaxSize()
+            .background(AntigravityPalette.BackgroundOled)
+    ) {
+        // Top Action Bar inside Main Canvas (Sidebar toggle on compact + `⋮` and `Open IDE` on right)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp)
+                .align(Alignment.TopCenter)
         ) {
-            items(uiState.chatTimeline, key = { it.id }) { timelineItem ->
-                when (timelineItem) {
-                    is ChatTimelineItem.UserPromptItem -> UserPromptBubble(timelineItem)
-                    is ChatTimelineItem.AgentThoughtCard -> AgentThoughtCardView(
-                        item = timelineItem,
-                        onToggleExpand = { onToggleThoughtExpanded(timelineItem.id) }
+            if (showSidebarToggleInCanvas) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable(onClick = onToggleSidebar)
+                        .padding(6.dp)
+                ) {
+                    AntigravityArchLogo(modifier = Modifier.size(18.dp))
+                    SidebarToggleIcon(modifier = Modifier.size(16.dp))
+                }
+            } else {
+                Spacer(modifier = Modifier.width(1.dp))
+            }
+
+            // Top-right: Three vertical dots + "Open IDE" button
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.MoreVert,
+                    contentDescription = "More Options",
+                    tint = AntigravityPalette.TextSecondary,
+                    modifier = Modifier
+                        .size(18.dp)
+                        .clickable(onClick = onToggleOpenIde)
+                )
+
+                Surface(
+                    color = AntigravityPalette.SurfaceDark,
+                    shape = RoundedCornerShape(6.dp),
+                    border = BorderStroke(1.dp, AntigravityPalette.BorderCard),
+                    modifier = Modifier.clickable(onClick = onToggleOpenIde)
+                ) {
+                    Text(
+                        text = "Open IDE",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = AntigravityPalette.TextPrimary,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                     )
-                    is ChatTimelineItem.GitDiffCard -> GitDiffIndicatorCard(
-                        item = timelineItem,
-                        onReviewClick = { onOpenDiffReview(timelineItem) }
+                }
+            }
+        }
+
+        if (uiState.chatTimeline.isEmpty()) {
+            // CENTERED NEW CONVERSATION VIEW (1:1 match with uploaded screenshot!)
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 20.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .widthIn(max = 640.dp)
+                        .fillMaxWidth()
+                ) {
+                    // Folder Project Selector right above the prompt card: [Folder] JavaKingdom v
+                    ProjectDropdownHeader(
+                        activeProject = uiState.activeProject,
+                        allProjects = uiState.projects,
+                        onSelectProject = onSelectProject
                     )
-                    is ChatTimelineItem.AgentResponseItem -> AgentResponseCardView(timelineItem)
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // The Iconic Antigravity Prompt Card
+                    AntigravityPromptComposerCard(
+                        uiState = uiState,
+                        showModelTooltip = true,
+                        onPromptChange = onPromptChange,
+                        onSendPrompt = onSendPrompt,
+                        onSelectModel = onSelectModel,
+                        onSelectReviewPolicy = onSelectReviewPolicy,
+                        onSelectCheckoutMode = onSelectCheckoutMode
+                    )
+                }
+            }
+        } else {
+            // ACTIVE CONVERSATION TIMELINE VIEW
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 48.dp)
+            ) {
+                LazyColumn(
+                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .widthIn(max = 760.dp)
+                        .fillMaxWidth()
+                        .align(Alignment.CenterHorizontally)
+                ) {
+                    items(uiState.chatTimeline, key = { it.id }) { item ->
+                        when (item) {
+                            is ChatTimelineItem.UserPromptItem -> UserMessageBubble(item)
+                            is ChatTimelineItem.AgentThoughtCard -> ThoughtTimelineRow(
+                                item = item,
+                                onToggle = { onToggleThoughtExpanded(item.id) }
+                            )
+                            is ChatTimelineItem.GitDiffCard -> DiffTimelineCard(
+                                item = item,
+                                onReview = { onOpenDiffReview(item) }
+                            )
+                            is ChatTimelineItem.AgentResponseItem -> AssistantMessageView(item)
+                        }
+                    }
+                }
+
+                // Bottom-docked Antigravity Prompt Card
+                Column(
+                    modifier = Modifier
+                        .widthIn(max = 720.dp)
+                        .fillMaxWidth()
+                        .align(Alignment.CenterHorizontally)
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                ) {
+                    ProjectDropdownHeader(
+                        activeProject = uiState.activeProject,
+                        allProjects = uiState.projects,
+                        onSelectProject = onSelectProject
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    AntigravityPromptComposerCard(
+                        uiState = uiState,
+                        showModelTooltip = false,
+                        onPromptChange = onPromptChange,
+                        onSendPrompt = onSendPrompt,
+                        onSelectModel = onSelectModel,
+                        onSelectReviewPolicy = onSelectReviewPolicy,
+                        onSelectCheckoutMode = onSelectCheckoutMode
+                    )
                 }
             }
         }
@@ -607,16 +838,475 @@ fun WorkspaceChatConsole(
 }
 
 @Composable
-private fun WorkspaceHeaderBreadcrumbBar(
+private fun ProjectDropdownHeader(
+    activeProject: WorkspaceProject,
+    allProjects: List<WorkspaceProject>,
+    onSelectProject: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Box {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .clickable { expanded = true }
+                .padding(horizontal = 4.dp, vertical = 4.dp)
+        ) {
+            FolderOutlineIcon(
+                color = AntigravityPalette.TextSecondary,
+                modifier = Modifier.size(15.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = activeProject.name,
+                fontSize = 13.5.sp,
+                color = AntigravityPalette.TextSecondary
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Icon(
+                imageVector = Icons.Default.KeyboardArrowDown,
+                contentDescription = "Select Project",
+                tint = AntigravityPalette.TextMuted,
+                modifier = Modifier.size(15.dp)
+            )
+        }
+
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.background(AntigravityPalette.SurfaceElevated)
+        ) {
+            allProjects.forEach { proj ->
+                DropdownMenuItem(
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            FolderOutlineIcon(
+                                color = AntigravityPalette.TextSecondary,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = proj.name,
+                                fontSize = 13.sp,
+                                color = AntigravityPalette.TextPrimary
+                            )
+                        }
+                    },
+                    onClick = {
+                        onSelectProject(proj.id)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The Iconic Antigravity 2.0 Prompt Card matching the screenshot:
+ * - Upper input area: `Ask anything, @ to mention, / for actions`
+ * - Control bar: `+` | `Gemini 4 Argon Medium ⌄` (with `Select Model Ctrl+/` badge) | `🛡️ Request Review ⌄` | `🎤` | Circular `→`
+ * - Bottom footer strip: `💻 Local Checkout ⌄`
+ */
+@Composable
+fun AntigravityPromptComposerCard(
     uiState: AntigravityUiState,
-    isExpandedLayout: Boolean,
-    onToggleSidebarOrDrawer: () -> Unit,
-    onOpenInspectorSheet: () -> Unit
+    showModelTooltip: Boolean,
+    onPromptChange: (String) -> Unit,
+    onSendPrompt: () -> Unit,
+    onSelectModel: (AntigravityProcessManager.AgyModelOption) -> Unit,
+    onSelectReviewPolicy: (ReviewPolicy) -> Unit,
+    onSelectCheckoutMode: (CheckoutMode) -> Unit
+) {
+    var modelMenuExpanded by remember { mutableStateOf(false) }
+    var reviewMenuExpanded by remember { mutableStateOf(false) }
+    var checkoutMenuExpanded by remember { mutableStateOf(false) }
+
+    Surface(
+        color = AntigravityPalette.SurfaceDark,
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, AntigravityPalette.BorderCard),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Upper Section: Input + Controls
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 14.dp)
+            ) {
+                // Input Row with optional floating "Select Model Ctrl+/" pill matching screenshot
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 38.dp)
+                ) {
+                    if (uiState.promptInput.isEmpty()) {
+                        Text(
+                            text = "Ask anything, @ to mention, / for actions",
+                            fontSize = 14.sp,
+                            color = AntigravityPalette.TextMuted
+                        )
+                    }
+
+                    BasicTextField(
+                        value = uiState.promptInput,
+                        onValueChange = onPromptChange,
+                        textStyle = TextStyle(
+                            color = AntigravityPalette.TextPrimary,
+                            fontSize = 14.sp
+                        ),
+                        cursorBrush = SolidColor(AntigravityPalette.AccentPrimary),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    if (showModelTooltip && uiState.promptInput.isEmpty()) {
+                        Surface(
+                            color = AntigravityPalette.SurfaceElevated,
+                            shape = RoundedCornerShape(6.dp),
+                            border = BorderStroke(1.dp, AntigravityPalette.NewConvoButtonBorder),
+                            modifier = Modifier
+                                .padding(start = 26.dp)
+                                .clickable { modelMenuExpanded = true }
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = "Select Model ",
+                                    fontSize = 11.5.sp,
+                                    color = AntigravityPalette.TextPrimary
+                                )
+                                Text(
+                                    text = "Ctrl+/",
+                                    fontSize = 11.sp,
+                                    color = AntigravityPalette.TextMuted
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Middle Control Row: [+] [Gemini 4 Argon Medium v] ... [Shield Request Review v] [Mic] [(->)]
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    // Left controls: + and Model Dropdown
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Attach context",
+                            tint = AntigravityPalette.TextSecondary,
+                            modifier = Modifier
+                                .size(16.dp)
+                                .clickable { onPromptChange(uiState.promptInput + "@") }
+                        )
+
+                        Box {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable { modelMenuExpanded = true }
+                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = uiState.selectedModel.displayName,
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = AntigravityPalette.TextSecondary
+                                )
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text(
+                                    text = uiState.selectedModel.tierBadge,
+                                    fontSize = 12.5.sp,
+                                    color = AntigravityPalette.TextMuted
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Icon(
+                                    imageVector = Icons.Default.KeyboardArrowDown,
+                                    contentDescription = "Select Model",
+                                    tint = AntigravityPalette.TextMuted,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+
+                            DropdownMenu(
+                                expanded = modelMenuExpanded,
+                                onDismissRequest = { modelMenuExpanded = false },
+                                modifier = Modifier.background(AntigravityPalette.SurfaceElevated)
+                            ) {
+                                uiState.availableModels.forEach { modelOption ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Text(
+                                                    text = modelOption.displayName,
+                                                    fontSize = 13.sp,
+                                                    color = AntigravityPalette.TextPrimary
+                                                )
+                                                Spacer(modifier = Modifier.width(12.dp))
+                                                Text(
+                                                    text = modelOption.tierBadge,
+                                                    fontSize = 12.sp,
+                                                    color = AntigravityPalette.TextMuted
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            onSelectModel(modelOption)
+                                            modelMenuExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Right controls: [Shield Request Review v] [Mic] [(->)]
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable { reviewMenuExpanded = true }
+                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                            ) {
+                                ShieldCheckIcon(
+                                    color = AntigravityPalette.TextSecondary,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text(
+                                    text = uiState.reviewPolicy.label,
+                                    fontSize = 12.sp,
+                                    color = AntigravityPalette.TextSecondary
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Icon(
+                                    imageVector = Icons.Default.KeyboardArrowDown,
+                                    contentDescription = "Review Policy",
+                                    tint = AntigravityPalette.TextMuted,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+
+                            DropdownMenu(
+                                expanded = reviewMenuExpanded,
+                                onDismissRequest = { reviewMenuExpanded = false },
+                                modifier = Modifier.background(AntigravityPalette.SurfaceElevated)
+                            ) {
+                                ReviewPolicy.entries.forEach { policy ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = policy.label,
+                                                fontSize = 13.sp,
+                                                color = AntigravityPalette.TextPrimary
+                                            )
+                                        },
+                                        onClick = {
+                                            onSelectReviewPolicy(policy)
+                                            reviewMenuExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        MicrophoneOutlineIcon(
+                            color = AntigravityPalette.TextSecondary,
+                            modifier = Modifier.size(15.dp)
+                        )
+
+                        // Circular Send Button (->) matching screenshot
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(28.dp)
+                                .clip(CircleShape)
+                                .background(AntigravityPalette.SendButtonCircleBg)
+                                .clickable(onClick = onSendPrompt)
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                                contentDescription = "Send Prompt",
+                                tint = AntigravityPalette.TextSecondary,
+                                modifier = Modifier.size(15.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Divider before footer
+            HorizontalDivider(thickness = 1.dp, color = AntigravityPalette.BorderSubtle)
+
+            // Bottom Footer Strip: [Laptop Icon] Local Checkout v
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(AntigravityPalette.SurfaceFooter)
+                    .padding(horizontal = 14.dp, vertical = 7.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .clickable { checkoutMenuExpanded = true }
+                ) {
+                    LaptopTerminalIcon(
+                        color = AntigravityPalette.TextMuted,
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = uiState.checkoutMode.label,
+                        fontSize = 11.5.sp,
+                        color = AntigravityPalette.TextMuted
+                    )
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowDown,
+                        contentDescription = "Checkout Mode",
+                        tint = AntigravityPalette.TextMuted,
+                        modifier = Modifier.size(13.dp)
+                    )
+                }
+
+                DropdownMenu(
+                    expanded = checkoutMenuExpanded,
+                    onDismissRequest = { checkoutMenuExpanded = false },
+                    modifier = Modifier.background(AntigravityPalette.SurfaceElevated)
+                ) {
+                    CheckoutMode.entries.forEach { mode ->
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = mode.label,
+                                    fontSize = 12.5.sp,
+                                    color = AntigravityPalette.TextPrimary
+                                )
+                            },
+                            onClick = {
+                                onSelectCheckoutMode(mode)
+                                checkoutMenuExpanded = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UserMessageBubble(item: ChatTimelineItem.UserPromptItem) {
+    Row(
+        horizontalArrangement = Arrangement.End,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Surface(
+            color = AntigravityPalette.SurfaceElevated,
+            shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(1.dp, AntigravityPalette.BorderCard),
+            modifier = Modifier.widthIn(max = 560.dp)
+        ) {
+            Text(
+                text = item.prompt,
+                fontSize = 14.sp,
+                color = AntigravityPalette.TextPrimary,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun ThoughtTimelineRow(
+    item: ChatTimelineItem.AgentThoughtCard,
+    onToggle: () -> Unit
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(AntigravityPalette.SurfaceDark)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onToggle)
+            .padding(vertical = 4.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            ClockOutlineIcon(
+                color = AntigravityPalette.TextMuted,
+                modifier = Modifier.size(13.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "Worked for ${item.workedSeconds}s",
+                fontSize = 12.5.sp,
+                color = AntigravityPalette.TextMuted
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Icon(
+                imageVector = if (item.isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                contentDescription = null,
+                tint = AntigravityPalette.TextMuted,
+                modifier = Modifier.size(14.dp)
+            )
+        }
+
+        AnimatedVisibility(visible = item.isExpanded) {
+            Surface(
+                color = AntigravityPalette.SurfaceDark,
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(1.dp, AntigravityPalette.BorderSubtle),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp)
+            ) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.padding(10.dp)
+                ) {
+                    item.steps.forEach { step ->
+                        Text(
+                            text = "• $step",
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = AntigravityPalette.TextSecondary
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiffTimelineCard(
+    item: ChatTimelineItem.GitDiffCard,
+    onReview: () -> Unit
+) {
+    Surface(
+        color = AntigravityPalette.SurfaceDark,
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, AntigravityPalette.BorderCard),
+        modifier = Modifier.fillMaxWidth()
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -629,133 +1319,50 @@ private fun WorkspaceHeaderBreadcrumbBar(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.weight(1f)
             ) {
-                IconButton(
-                    onClick = onToggleSidebarOrDrawer,
-                    modifier = Modifier.size(34.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Menu,
-                        contentDescription = "Toggle Workspaces",
-                        tint = AntigravityPalette.TextPrimary
-                    )
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                Column {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = uiState.activeProject.name,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = uiState.activeProject.branch,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontSize = 11.sp,
-                            color = AntigravityPalette.AccentCyan,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(AntigravityPalette.SurfaceElevated)
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
-                    }
-                    Text(
-                        text = uiState.activeProject.pathBreadcrumb,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontSize = 11.sp,
-                        color = AntigravityPalette.TextSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-
-            // Live Engine Status Pill + Compact Terminal Button
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(AntigravityPalette.SurfaceElevated)
-                        .border(1.dp, AntigravityPalette.BorderSubtle, RoundedCornerShape(20.dp))
-                        .padding(horizontal = 10.dp, vertical = 5.dp)
-                ) {
-                    StatusDot(
-                        color = when (uiState.engineStatus) {
-                            AgentDaemonService.EngineStatus.LISTENING -> AntigravityPalette.StatusActiveGreen
-                            AgentDaemonService.EngineStatus.EXECUTING_TASK -> AntigravityPalette.AccentCyan
-                            AgentDaemonService.EngineStatus.STARTING -> AntigravityPalette.StatusWarningAmber
-                            AgentDaemonService.EngineStatus.ERROR -> AntigravityPalette.StatusErrorRed
-                        }
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "127.0.0.1:${uiState.daemonPort}",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontSize = 11.sp,
-                        color = AntigravityPalette.TextPrimary
-                    )
-                }
-
-                if (!isExpandedLayout) {
-                    Spacer(modifier = Modifier.width(6.dp))
-                    IconButton(
-                        onClick = onOpenInspectorSheet,
-                        modifier = Modifier
-                            .size(34.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(AntigravityPalette.SurfaceElevated)
-                            .border(1.dp, AntigravityPalette.BorderSubtle, RoundedCornerShape(8.dp))
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Terminal,
-                            contentDescription = "Open Terminal & Inspector Sheet",
-                            tint = AntigravityPalette.AccentCyan,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-            }
-        }
-        HorizontalDivider(thickness = 1.dp, color = AntigravityPalette.BorderSubtle)
-    }
-}
-
-@Composable
-private fun UserPromptBubble(item: ChatTimelineItem.UserPromptItem) {
-    Column(
-        horizontalAlignment = Alignment.End,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Surface(
-            color = AntigravityPalette.SurfaceElevated,
-            shape = RoundedCornerShape(12.dp),
-            border = BorderStroke(1.dp, AntigravityPalette.AccentPrimary.copy(alpha = 0.45f)),
-            modifier = Modifier.fillMaxWidth(0.92f)
-        ) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                Row(
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = "YOU",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontSize = 10.sp,
-                        color = AntigravityPalette.AccentPrimary
-                    )
-                    Text(
-                        text = item.timestamp,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontSize = 10.sp,
-                        color = AntigravityPalette.TextMuted
-                    )
-                }
-                Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = item.prompt,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = AntigravityPalette.TextPrimary
+                    text = item.filePath.substringAfterLast('/'),
+                    fontSize = 13.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Medium,
+                    color = AntigravityPalette.TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "+${item.additions}",
+                    fontSize = 11.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = AntigravityPalette.DiffAddGreen,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(AntigravityPalette.DiffAddBg)
+                        .padding(horizontal = 5.dp, vertical = 1.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = "-${item.deletions}",
+                    fontSize = 11.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = AntigravityPalette.DiffDelRed,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(AntigravityPalette.DiffDelBg)
+                        .padding(horizontal = 5.dp, vertical = 1.dp)
+                )
+            }
+
+            Surface(
+                color = AntigravityPalette.SurfaceElevated,
+                shape = RoundedCornerShape(6.dp),
+                border = BorderStroke(1.dp, AntigravityPalette.NewConvoButtonBorder),
+                modifier = Modifier.clickable(onClick = onReview)
+            ) {
+                Text(
+                    text = "Review",
+                    fontSize = 11.5.sp,
+                    color = AntigravityPalette.TextPrimary,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                 )
             }
         }
@@ -763,422 +1370,40 @@ private fun UserPromptBubble(item: ChatTimelineItem.UserPromptItem) {
 }
 
 @Composable
-private fun AgentThoughtCardView(
-    item: ChatTimelineItem.AgentThoughtCard,
-    onToggleExpand: () -> Unit
-) {
-    Surface(
-        color = AntigravityPalette.SurfaceDark,
-        shape = RoundedCornerShape(10.dp),
-        border = BorderStroke(1.dp, AntigravityPalette.BorderSubtle),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onToggleExpand)
-    ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Memory,
-                        contentDescription = null,
-                        tint = AntigravityPalette.AccentCyan,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Worked for ${item.workedSeconds}s",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = AntigravityPalette.AccentCyan,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = item.summary.substringAfter("• ", item.summary),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = AntigravityPalette.TextSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                Icon(
-                    imageVector = if (item.isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = "Expand Thought",
-                    tint = AntigravityPalette.TextSecondary,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-
-            AnimatedVisibility(visible = item.isExpanded) {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                    modifier = Modifier.padding(top = 10.dp)
-                ) {
-                    HorizontalDivider(color = AntigravityPalette.BorderSubtle)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    item.steps.forEach { step ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.CheckCircle,
-                                contentDescription = null,
-                                tint = AntigravityPalette.StatusActiveGreen,
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = step,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = FontFamily.Monospace,
-                                color = AntigravityPalette.TextSecondary
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun GitDiffIndicatorCard(
-    item: ChatTimelineItem.GitDiffCard,
-    onReviewClick: () -> Unit
-) {
-    Surface(
-        color = AntigravityPalette.SurfaceDark,
-        shape = RoundedCornerShape(10.dp),
-        border = BorderStroke(1.dp, AntigravityPalette.BorderSubtle),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Code,
-                        contentDescription = null,
-                        tint = AntigravityPalette.AccentPrimary,
-                        modifier = Modifier.size(17.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = item.filePath.substringAfterLast('/'),
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    // +30 -6 git diff indicators
-                    Text(
-                        text = "+${item.additions}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = AntigravityPalette.DiffAddGreen,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(AntigravityPalette.DiffAddBg)
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "-${item.deletions}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = AntigravityPalette.DiffDelRed,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(AntigravityPalette.DiffDelBg)
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
-                }
-
-                OutlinedButton(
-                    onClick = onReviewClick,
-                    shape = RoundedCornerShape(8.dp),
-                    border = BorderStroke(1.dp, AntigravityPalette.AccentPrimary),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                    modifier = Modifier.height(30.dp)
-                ) {
-                    Text(
-                        text = "Review",
-                        fontSize = 12.sp,
-                        color = AntigravityPalette.AccentPrimary,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-            }
-
+private fun AssistantMessageView(item: ChatTimelineItem.AgentResponseItem) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = item.markdownText,
+            fontSize = 14.sp,
+            lineHeight = 21.sp,
+            color = AntigravityPalette.TextPrimary
+        )
+        if (!item.tokenUsageLabel.isNullOrBlank()) {
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = item.filePath,
-                style = MaterialTheme.typography.labelMedium,
+                text = item.tokenUsageLabel,
                 fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
                 color = AntigravityPalette.TextMuted
             )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = item.summary,
-                style = MaterialTheme.typography.bodySmall,
-                color = AntigravityPalette.TextSecondary
-            )
-        }
-    }
-}
-
-@Composable
-private fun AgentResponseCardView(item: ChatTimelineItem.AgentResponseItem) {
-    Surface(
-        color = AntigravityPalette.SurfaceDark,
-        shape = RoundedCornerShape(12.dp),
-        border = BorderStroke(1.dp, AntigravityPalette.BorderSubtle),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.AutoAwesome,
-                        contentDescription = null,
-                        tint = AntigravityPalette.AccentPrimary,
-                        modifier = Modifier.size(15.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "ANTIGRAVITY AGENT",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontSize = 11.sp,
-                        color = AntigravityPalette.AccentPrimary,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                Text(
-                    text = item.timestamp,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontSize = 10.sp,
-                    color = AntigravityPalette.TextMuted
-                )
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = item.markdownText,
-                style = MaterialTheme.typography.bodyMedium,
-                color = AntigravityPalette.TextPrimary
-            )
-        }
-    }
-}
-
-@Composable
-private fun FloatingAgentPromptBar(
-    uiState: AntigravityUiState,
-    onPromptChange: (String) -> Unit,
-    onSendPrompt: () -> Unit,
-    onSelectModel: (String) -> Unit,
-    onCyclePermissionPreset: () -> Unit,
-    onTriggerQuickAction: (String) -> Unit
-) {
-    var modelDropdownExpanded by remember { mutableStateOf(false) }
-
-    Surface(
-        color = AntigravityPalette.SurfaceDark,
-        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
-        border = BorderStroke(1.dp, AntigravityPalette.BorderSubtle),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 6.dp)
-    ) {
-        Column(modifier = Modifier.padding(10.dp)) {
-            OutlinedTextField(
-                value = uiState.promptInput,
-                onValueChange = onPromptChange,
-                placeholder = {
-                    Text(
-                        text = "Ask Antigravity Agent or run `/plan`, `/goal`, `@file`...",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = AntigravityPalette.TextMuted
-                    )
-                },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = AntigravityPalette.BackgroundOled,
-                    unfocusedContainerColor = AntigravityPalette.BackgroundOled,
-                    focusedBorderColor = AntigravityPalette.AccentPrimary,
-                    unfocusedBorderColor = AntigravityPalette.BorderSubtle,
-                    focusedTextColor = AntigravityPalette.TextPrimary,
-                    unfocusedTextColor = AntigravityPalette.TextPrimary
-                ),
-                shape = RoundedCornerShape(10.dp),
-                maxLines = 4,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 52.dp)
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Bottom Control Row: Model Dropdown | Permission Preset | Quick Triggers | Send
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    // Model Selector Dropdown
-                    Box {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(AntigravityPalette.SurfaceElevated)
-                                .border(1.dp, AntigravityPalette.BorderSubtle, RoundedCornerShape(8.dp))
-                                .clickable { modelDropdownExpanded = true }
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
-                        ) {
-                            Text(
-                                text = uiState.selectedModel,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontSize = 11.sp,
-                                color = AntigravityPalette.TextPrimary
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Icon(
-                                imageVector = Icons.Default.ExpandMore,
-                                contentDescription = "Select Model",
-                                tint = AntigravityPalette.TextSecondary,
-                                modifier = Modifier.size(14.dp)
-                            )
-                        }
-
-                        DropdownMenu(
-                            expanded = modelDropdownExpanded,
-                            onDismissRequest = { modelDropdownExpanded = false },
-                            modifier = Modifier.background(AntigravityPalette.SurfaceElevated)
-                        ) {
-                            uiState.availableModels.forEach { modelName ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            text = modelName,
-                                            color = AntigravityPalette.TextPrimary,
-                                            fontSize = 13.sp
-                                        )
-                                    },
-                                    onClick = {
-                                        onSelectModel(modelName)
-                                        modelDropdownExpanded = false
-                                    }
-                                )
-                            }
-                        }
-                    }
-
-                    // Permission Preset Badge
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(AntigravityPalette.SurfaceElevated)
-                            .border(1.dp, AntigravityPalette.BorderSubtle, RoundedCornerShape(8.dp))
-                            .clickable(onClick = onCyclePermissionPreset)
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Security,
-                            contentDescription = null,
-                            tint = AntigravityPalette.AccentCyan,
-                            modifier = Modifier.size(13.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = uiState.permissionPreset.badge,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontSize = 11.sp,
-                            color = AntigravityPalette.AccentCyan
-                        )
-                    }
-
-                    // Action Trigger Pill
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(AntigravityPalette.SurfaceElevated)
-                            .border(1.dp, AntigravityPalette.BorderSubtle, RoundedCornerShape(8.dp))
-                            .clickable { onTriggerQuickAction("Terminal") }
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Build,
-                            contentDescription = "Trigger Action",
-                            tint = AntigravityPalette.TextSecondary,
-                            modifier = Modifier.size(13.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "Tools",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontSize = 11.sp,
-                            color = AntigravityPalette.TextSecondary
-                        )
-                    }
-                }
-
-                // Dispatch Prompt Button
-                IconButton(
-                    onClick = onSendPrompt,
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(AntigravityPalette.AccentPrimary)
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "Dispatch Prompt",
-                        tint = Color.White,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-            }
         }
     }
 }
 
 /**
- * Component 3: Inspector / Background Commands Pane
- * Includes Quick action tiles (Review, Open File, Terminal, Browser),
- * live command status items, and live Node.js / shell stdout/stderr stream.
+ * Right-hand / Bottom-Sheet IDE & Real Antigravity CLI Terminal Inspector
  */
 @Composable
-fun InspectorAndTerminalPane(
+fun OpenIdeInspectorPane(
     uiState: AntigravityUiState,
-    onTriggerQuickAction: (String) -> Unit,
     onRunTerminalCommand: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var shellInput by remember { mutableStateOf("") }
+    var commandInput by remember { mutableStateOf("") }
 
     Column(
         modifier = modifier
-            .background(AntigravityPalette.SurfaceDark)
+            .background(AntigravityPalette.SidebarBg)
             .padding(14.dp)
     ) {
         Row(
@@ -1187,84 +1412,72 @@ fun InspectorAndTerminalPane(
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
-                text = "INSPECTOR & BACKGROUND COMMANDS",
-                style = MaterialTheme.typography.labelMedium,
+                text = "ANTIGRAVITY CLI & TERMINAL",
                 fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
                 color = AntigravityPalette.TextMuted
             )
             Text(
-                text = "PID ${uiState.daemonPid}",
-                style = MaterialTheme.typography.labelMedium,
+                text = "agy v${uiState.cliVersion}",
                 fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
                 color = AntigravityPalette.StatusActiveGreen
             )
         }
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // Quick Action Tiles: Review | Open File | Terminal | Browser
+        // Quick real `agy` CLI actions
         Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            QuickActionTile(
-                icon = Icons.Default.Code,
-                label = "Review",
-                onClick = { onTriggerQuickAction("Review") },
-                modifier = Modifier.weight(1f)
-            )
-            QuickActionTile(
-                icon = Icons.Default.Description,
-                label = "Open File",
-                onClick = { onTriggerQuickAction("Open File") },
-                modifier = Modifier.weight(1f)
-            )
-            QuickActionTile(
-                icon = Icons.Default.Terminal,
-                label = "Terminal",
-                onClick = { onTriggerQuickAction("Terminal") },
-                modifier = Modifier.weight(1f)
-            )
-            QuickActionTile(
-                icon = Icons.Default.Language,
-                label = "Browser",
-                onClick = { onTriggerQuickAction("Browser") },
-                modifier = Modifier.weight(1f)
-            )
+            IdeQuickChip("agy --version") { onRunTerminalCommand("agy --version") }
+            IdeQuickChip("agy models") { onRunTerminalCommand("agy models") }
+            IdeQuickChip("agy mcp list") { onRunTerminalCommand("agy mcp list") }
+            IdeQuickChip("agy agents") { onRunTerminalCommand("agy agents") }
         }
 
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
-        Text(
-            text = "ACTIVE & RECENT PROCESSES",
-            style = MaterialTheme.typography.labelMedium,
-            fontSize = 11.sp,
-            color = AntigravityPalette.TextMuted
-        )
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            uiState.backgroundCommands.take(3).forEach { cmd ->
-                BackgroundCommandStatusRow(cmd)
+        // Background Commands List
+        uiState.backgroundCommands.take(2).forEach { cmd ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 3.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(AntigravityPalette.BackgroundOled)
+                    .border(1.dp, AntigravityPalette.BorderSubtle, RoundedCornerShape(6.dp))
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = cmd.command,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = AntigravityPalette.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = cmd.durationLabel,
+                    fontSize = 10.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = AntigravityPalette.StatusActiveGreen
+                )
             }
         }
 
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
-        Text(
-            text = "LIVE ENGINE STDOUT / STDERR STREAM",
-            style = MaterialTheme.typography.labelMedium,
-            fontSize = 11.sp,
-            color = AntigravityPalette.TextMuted
-        )
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        // Live Terminal Output Console
+        // Live stdout/stderr stream from `context.filesDir/runtime/bin/agy`
         Surface(
             color = AntigravityPalette.BackgroundOled,
-            shape = RoundedCornerShape(10.dp),
+            shape = RoundedCornerShape(8.dp),
             border = BorderStroke(1.dp, AntigravityPalette.BorderSubtle),
             modifier = Modifier
                 .weight(1f)
@@ -1275,15 +1488,13 @@ fun InspectorAndTerminalPane(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(uiState.terminalLogs) { logLine ->
+                items(uiState.terminalLogs) { line ->
                     Text(
-                        text = logLine,
-                        style = MaterialTheme.typography.labelMedium,
+                        text = line,
                         fontSize = 11.sp,
-                        color = if (logLine.contains("ERROR")) {
-                            AntigravityPalette.StatusErrorRed
-                        } else if (logLine.contains("Listening") || logLine.contains("listening")) {
-                            AntigravityPalette.StatusActiveGreen
+                        fontFamily = FontFamily.Monospace,
+                        color = if (line.contains("ERROR") || line.contains("stderr")) {
+                            AntigravityPalette.DiffDelRed
                         } else {
                             AntigravityPalette.TextSecondary
                         }
@@ -1294,19 +1505,19 @@ fun InspectorAndTerminalPane(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Interactive Shell Command Input Bar
+        // Interactive shell/agy input
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth()
         ) {
             OutlinedTextField(
-                value = shellInput,
-                onValueChange = { shellInput = it },
+                value = commandInput,
+                onValueChange = { commandInput = it },
                 placeholder = {
                     Text(
-                        text = "$ busybox ls -la runtime/bin",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontSize = 11.sp,
+                        text = "$ agy --help",
+                        fontSize = 11.5.sp,
+                        fontFamily = FontFamily.Monospace,
                         color = AntigravityPalette.TextMuted
                     )
                 },
@@ -1314,7 +1525,7 @@ fun InspectorAndTerminalPane(
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedContainerColor = AntigravityPalette.BackgroundOled,
                     unfocusedContainerColor = AntigravityPalette.BackgroundOled,
-                    focusedBorderColor = AntigravityPalette.AccentCyan,
+                    focusedBorderColor = AntigravityPalette.AccentPrimary,
                     unfocusedBorderColor = AntigravityPalette.BorderSubtle,
                     focusedTextColor = AntigravityPalette.TextPrimary,
                     unfocusedTextColor = AntigravityPalette.TextPrimary
@@ -1322,22 +1533,21 @@ fun InspectorAndTerminalPane(
                 shape = RoundedCornerShape(8.dp),
                 modifier = Modifier.weight(1f)
             )
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(6.dp))
             IconButton(
                 onClick = {
-                    onRunTerminalCommand(shellInput)
-                    shellInput = ""
+                    onRunTerminalCommand(commandInput)
+                    commandInput = ""
                 },
                 modifier = Modifier
-                    .size(40.dp)
+                    .size(38.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .background(AntigravityPalette.SurfaceElevated)
-                    .border(1.dp, AntigravityPalette.BorderSubtle, RoundedCornerShape(8.dp))
             ) {
                 Icon(
                     imageVector = Icons.Default.PlayArrow,
-                    contentDescription = "Execute Command",
-                    tint = AntigravityPalette.AccentCyan
+                    contentDescription = "Run",
+                    tint = AntigravityPalette.TextPrimary
                 )
             }
         }
@@ -1345,88 +1555,112 @@ fun InspectorAndTerminalPane(
 }
 
 @Composable
-private fun QuickActionTile(
-    icon: ImageVector,
-    label: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-        modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(AntigravityPalette.SurfaceElevated)
-            .border(1.dp, AntigravityPalette.BorderSubtle, RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
-            .padding(vertical = 10.dp, horizontal = 6.dp)
+private fun IdeQuickChip(label: String, onClick: () -> Unit) {
+    Surface(
+        color = AntigravityPalette.SurfaceElevated,
+        shape = RoundedCornerShape(6.dp),
+        border = BorderStroke(1.dp, AntigravityPalette.NewConvoButtonBorder),
+        modifier = Modifier.clickable(onClick = onClick)
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = label,
-            tint = AntigravityPalette.AccentPrimary,
-            modifier = Modifier.size(18.dp)
-        )
-        Spacer(modifier = Modifier.height(4.dp))
         Text(
             text = label,
-            style = MaterialTheme.typography.labelMedium,
-            fontSize = 11.sp,
+            fontSize = 10.5.sp,
+            fontFamily = FontFamily.Monospace,
             color = AntigravityPalette.TextPrimary,
-            maxLines = 1
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
         )
     }
 }
 
 @Composable
-private fun BackgroundCommandStatusRow(item: BackgroundCommandItem) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(AntigravityPalette.BackgroundOled)
-            .border(1.dp, AntigravityPalette.BorderSubtle, RoundedCornerShape(8.dp))
-            .padding(horizontal = 10.dp, vertical = 8.dp)
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.weight(1f)
-        ) {
-            StatusDot(
-                color = when (item.status) {
-                    CommandStatus.LISTENING, CommandStatus.RUNNING -> AntigravityPalette.StatusActiveGreen
-                    CommandStatus.COMPLETED -> AntigravityPalette.AccentCyan
-                    CommandStatus.FAILED -> AntigravityPalette.StatusErrorRed
-                }
+private fun AntigravitySettingsDialog(
+    uiState: AntigravityUiState,
+    onSaveApiKey: (String) -> Unit,
+    onRunCliCommand: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var keyText by remember(uiState.apiKey) { mutableStateOf(uiState.apiKey) }
+    val uriHandler = LocalUriHandler.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = AntigravityPalette.SurfaceDark,
+        titleContentColor = AntigravityPalette.TextPrimary,
+        textContentColor = AntigravityPalette.TextSecondary,
+        title = {
+            Text(
+                text = "Antigravity CLI Settings (v${uiState.cliVersion})",
+                style = MaterialTheme.typography.titleMedium
             )
-            Spacer(modifier = Modifier.width(8.dp))
-            Column {
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    text = item.command,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontSize = 11.sp,
-                    color = AntigravityPalette.TextPrimary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    text = "Native Binary: filesDir/runtime/bin/agy (android_arm64 Bionic ELF)",
+                    fontSize = 11.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = AntigravityPalette.StatusActiveGreen
                 )
+
+                if (uiState.detectedAuthUrl != null) {
+                    OutlinedButton(
+                        onClick = { uriHandler.openUri(uiState.detectedAuthUrl) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Open Google Sign-In for agy CLI")
+                    }
+                }
+
                 Text(
-                    text = item.workingDir,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontSize = 10.sp,
-                    color = AntigravityPalette.TextMuted
+                    text = "GEMINI_API_KEY (injected into agy environment & direct fallback):",
+                    fontSize = 12.sp,
+                    color = AntigravityPalette.TextSecondary
                 )
+
+                OutlinedTextField(
+                    value = keyText,
+                    onValueChange = { keyText = it },
+                    placeholder = { Text("AIzaSy...", fontSize = 12.sp) },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = AntigravityPalette.BackgroundOled,
+                        unfocusedContainerColor = AntigravityPalette.BackgroundOled,
+                        focusedBorderColor = AntigravityPalette.AccentPrimary,
+                        unfocusedBorderColor = AntigravityPalette.BorderSubtle,
+                        focusedTextColor = AntigravityPalette.TextPrimary,
+                        unfocusedTextColor = AntigravityPalette.TextPrimary
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    IdeQuickChip("Verify agy --version") {
+                        onRunCliCommand("agy --version")
+                        onDismiss()
+                    }
+                    IdeQuickChip("Start Remote-Control") {
+                        onRunCliCommand("agy remote-control status")
+                        onDismiss()
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    onSaveApiKey(keyText)
+                    onDismiss()
+                }
+            ) {
+                Text("Save", color = AntigravityPalette.AccentPrimary)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close", color = AntigravityPalette.TextSecondary)
             }
         }
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(
-            text = item.durationLabel,
-            style = MaterialTheme.typography.labelMedium,
-            fontSize = 10.sp,
-            color = AntigravityPalette.TextSecondary
-        )
-    }
+    )
 }
 
 @Composable
@@ -1440,24 +1674,17 @@ private fun GitDiffReviewDialog(
         titleContentColor = AntigravityPalette.TextPrimary,
         textContentColor = AntigravityPalette.TextSecondary,
         title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.Code,
-                    contentDescription = null,
-                    tint = AntigravityPalette.AccentPrimary
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Diff Review • +${diffCard.additions} -${diffCard.deletions}",
-                    style = MaterialTheme.typography.titleMedium
-                )
-            }
+            Text(
+                text = "Review Changes • +${diffCard.additions} -${diffCard.deletions}",
+                style = MaterialTheme.typography.titleMedium
+            )
         },
         text = {
             Column {
                 Text(
                     text = diffCard.filePath,
-                    style = MaterialTheme.typography.labelMedium,
+                    fontSize = 11.5.sp,
+                    fontFamily = FontFamily.Monospace,
                     color = AntigravityPalette.AccentCyan
                 )
                 Spacer(modifier = Modifier.height(8.dp))
@@ -1469,7 +1696,8 @@ private fun GitDiffReviewDialog(
                 ) {
                     Text(
                         text = diffCard.patchPreview,
-                        style = MaterialTheme.typography.labelMedium,
+                        fontSize = 11.5.sp,
+                        fontFamily = FontFamily.Monospace,
                         color = AntigravityPalette.TextPrimary,
                         modifier = Modifier.padding(10.dp)
                     )
@@ -1478,51 +1706,195 @@ private fun GitDiffReviewDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("Approve & Close", color = AntigravityPalette.AccentPrimary)
+                Text("Done", color = AntigravityPalette.AccentPrimary)
             }
         }
     )
 }
 
-@Composable
-private fun StatusDot(color: Color) {
-    Box(
-        modifier = Modifier
-            .size(8.dp)
-            .clip(CircleShape)
-            .background(color)
-    )
-}
+/* ============================================================================
+ * Custom Canvas Vector Icons matching the exact Antigravity 2.0 Screenshot
+ * ============================================================================ */
 
-@Preview(
-    name = "Antigravity Phone Compact",
-    widthDp = 412,
-    heightDp = 892,
-    showBackground = true
-)
 @Composable
-fun AntigravityStudioCompactPreview() {
-    AntigravityStudioTheme {
-        AntigravityStudioScreen(
-            uiState = AntigravityUiState(),
-            windowWidthSizeClass = WindowWidthSizeClass.Compact,
-            onSelectProject = {},
-            onNewConversation = {},
-            onPromptChange = {},
-            onSendPrompt = {},
-            onSelectModel = {},
-            onCyclePermissionPreset = {},
-            onToggleThoughtExpanded = {},
-            onOpenDiffReview = {},
-            onSetInspectorVisible = {},
-            onTriggerQuickAction = {},
-            onRunTerminalCommand = {}
+private fun AntigravityArchLogo(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val path = Path().apply {
+            moveTo(w * 0.15f, h * 0.88f)
+            cubicTo(w * 0.28f, h * 0.12f, w * 0.72f, h * 0.12f, w * 0.85f, h * 0.88f)
+        }
+        drawPath(
+            path = path,
+            color = Color(0xFFE4E6EB),
+            style = Stroke(width = w * 0.16f, cap = StrokeCap.Round, join = StrokeJoin.Round)
         )
     }
 }
 
+@Composable
+private fun SidebarToggleIcon(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val stroke = 1.4.dp.toPx()
+        drawRoundRect(
+            color = Color(0xFF9CA0A8),
+            topLeft = Offset(0f, size.height * 0.1f),
+            size = Size(size.width, size.height * 0.8f),
+            cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx()),
+            style = Stroke(width = stroke)
+        )
+        drawLine(
+            color = Color(0xFF9CA0A8),
+            start = Offset(size.width * 0.35f, size.height * 0.1f),
+            end = Offset(size.width * 0.35f, size.height * 0.9f),
+            strokeWidth = stroke
+        )
+    }
+}
+
+@Composable
+private fun FolderOutlineIcon(color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val stroke = 1.3.dp.toPx()
+        val w = size.width
+        val h = size.height
+        val path = Path().apply {
+            moveTo(w * 0.08f, h * 0.25f)
+            lineTo(w * 0.38f, h * 0.25f)
+            lineTo(w * 0.48f, h * 0.36f)
+            lineTo(w * 0.92f, h * 0.36f)
+            lineTo(w * 0.92f, h * 0.82f)
+            lineTo(w * 0.08f, h * 0.82f)
+            close()
+        }
+        drawPath(path = path, color = color, style = Stroke(width = stroke, join = StrokeJoin.Round))
+    }
+}
+
+@Composable
+private fun ClockOutlineIcon(color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val stroke = 1.3.dp.toPx()
+        drawCircle(color = color, style = Stroke(width = stroke))
+        drawLine(
+            color = color,
+            start = center,
+            end = Offset(center.x, size.height * 0.28f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round
+        )
+        drawLine(
+            color = color,
+            start = center,
+            end = Offset(size.width * 0.72f, center.y),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round
+        )
+    }
+}
+
+@Composable
+private fun ToolboxOutlineIcon(color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val stroke = 1.3.dp.toPx()
+        val w = size.width
+        val h = size.height
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(w * 0.1f, h * 0.32f),
+            size = Size(w * 0.8f, h * 0.54f),
+            cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx()),
+            style = Stroke(width = stroke)
+        )
+        drawLine(
+            color = color,
+            start = Offset(w * 0.35f, h * 0.32f),
+            end = Offset(w * 0.35f, h * 0.18f),
+            strokeWidth = stroke
+        )
+        drawLine(
+            color = color,
+            start = Offset(w * 0.35f, h * 0.18f),
+            end = Offset(w * 0.65f, h * 0.18f),
+            strokeWidth = stroke
+        )
+        drawLine(
+            color = color,
+            start = Offset(w * 0.65f, h * 0.18f),
+            end = Offset(w * 0.65f, h * 0.32f),
+            strokeWidth = stroke
+        )
+    }
+}
+
+@Composable
+private fun FilterLinesIcon(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val stroke = 1.3.dp.toPx()
+        val c = Color(0xFF686B73)
+        drawLine(c, Offset(0f, size.height * 0.25f), Offset(size.width, size.height * 0.25f), stroke)
+        drawLine(c, Offset(size.width * 0.2f, size.height * 0.5f), Offset(size.width * 0.8f, size.height * 0.5f), stroke)
+        drawLine(c, Offset(size.width * 0.35f, size.height * 0.75f), Offset(size.width * 0.65f, size.height * 0.75f), stroke)
+    }
+}
+
+@Composable
+private fun ShieldCheckIcon(color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val stroke = 1.3.dp.toPx()
+        val w = size.width
+        val h = size.height
+        val path = Path().apply {
+            moveTo(w * 0.5f, h * 0.1f)
+            lineTo(w * 0.88f, h * 0.25f)
+            lineTo(w * 0.88f, h * 0.55f)
+            cubicTo(w * 0.88f, h * 0.78f, w * 0.5f, h * 0.92f, w * 0.5f, h * 0.92f)
+            cubicTo(w * 0.5f, h * 0.92f, w * 0.12f, h * 0.78f, w * 0.12f, h * 0.55f)
+            lineTo(w * 0.12f, h * 0.25f)
+            close()
+        }
+        drawPath(path, color = color, style = Stroke(width = stroke, join = StrokeJoin.Round))
+    }
+}
+
+@Composable
+private fun MicrophoneOutlineIcon(color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val stroke = 1.3.dp.toPx()
+        val w = size.width
+        val h = size.height
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(w * 0.32f, h * 0.12f),
+            size = Size(w * 0.36f, h * 0.48f),
+            cornerRadius = CornerRadius(w * 0.18f, w * 0.18f),
+            style = Stroke(width = stroke)
+        )
+        drawLine(color, Offset(w * 0.5f, h * 0.65f), Offset(w * 0.5f, h * 0.88f), stroke)
+        drawLine(color, Offset(w * 0.32f, h * 0.88f), Offset(w * 0.68f, h * 0.88f), stroke)
+    }
+}
+
+@Composable
+private fun LaptopTerminalIcon(color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val stroke = 1.2.dp.toPx()
+        val w = size.width
+        val h = size.height
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(w * 0.15f, h * 0.18f),
+            size = Size(w * 0.7f, h * 0.52f),
+            cornerRadius = CornerRadius(1.5.dp.toPx(), 1.5.dp.toPx()),
+            style = Stroke(width = stroke)
+        )
+        drawLine(color, Offset(w * 0.05f, h * 0.80f), Offset(w * 0.95f, h * 0.80f), stroke)
+    }
+}
+
 @Preview(
-    name = "Antigravity Tablet Expanded 3-Pane IDE",
+    name = "Antigravity 2.0 Desktop/Tablet Expanded Style",
     widthDp = 1280,
     heightDp = 800,
     showBackground = true
@@ -1534,15 +1906,50 @@ fun AntigravityStudioExpandedPreview() {
             uiState = AntigravityUiState(),
             windowWidthSizeClass = WindowWidthSizeClass.Expanded,
             onSelectProject = {},
+            onSelectSession = { _, _ -> },
             onNewConversation = {},
             onPromptChange = {},
             onSendPrompt = {},
             onSelectModel = {},
-            onCyclePermissionPreset = {},
+            onSelectReviewPolicy = {},
+            onSelectCheckoutMode = {},
             onToggleThoughtExpanded = {},
             onOpenDiffReview = {},
-            onSetInspectorVisible = {},
-            onTriggerQuickAction = {},
+            onToggleOpenIdePane = {},
+            onSetOpenIdePaneVisible = {},
+            onSetSettingsVisible = {},
+            onSaveApiKey = {},
+            onRunTerminalCommand = {}
+        )
+    }
+}
+
+@Preview(
+    name = "Antigravity 2.0 Phone Compact Style",
+    widthDp = 412,
+    heightDp = 892,
+    showBackground = true
+)
+@Composable
+fun AntigravityStudioCompactPreview() {
+    AntigravityStudioTheme {
+        AntigravityStudioScreen(
+            uiState = AntigravityUiState(),
+            windowWidthSizeClass = WindowWidthSizeClass.Compact,
+            onSelectProject = {},
+            onSelectSession = { _, _ -> },
+            onNewConversation = {},
+            onPromptChange = {},
+            onSendPrompt = {},
+            onSelectModel = {},
+            onSelectReviewPolicy = {},
+            onSelectCheckoutMode = {},
+            onToggleThoughtExpanded = {},
+            onOpenDiffReview = {},
+            onToggleOpenIdePane = {},
+            onSetOpenIdePaneVisible = {},
+            onSetSettingsVisible = {},
+            onSaveApiKey = {},
             onRunTerminalCommand = {}
         )
     }

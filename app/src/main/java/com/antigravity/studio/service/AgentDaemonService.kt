@@ -11,7 +11,6 @@ import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.antigravity.studio.MainActivity
@@ -21,53 +20,26 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Response
-import okhttp3.WebSocket
-import okhttp3.WebSocketListener
-import java.util.concurrent.TimeUnit
 
 /**
  * Module 3: Persistent Background Service (`AgentDaemonService.kt`)
  *
- * Hosts the embedded Node.js CLI runtime inside an Android `ForegroundService` configured
- * with `foregroundServiceType="dataSync"` and `START_STICKY`.
- *
- * Responsibilities:
- * 1. Displays an ongoing persistent notification reflecting live engine status:
- *    - Starting
- *    - Listening on port 8765
- *    - Executing task
- *    - Error
- * 2. Provides a dual Local IPC/Communication interface:
- *    - Direct Android `LocalBinder` for zero-latency in-process Compose UI observation & command dispatch.
- *    - Localhost WebSocket/HTTP client (`ws://127.0.0.1:8765/ws` & `http://127.0.0.1:8765/api/prompt`)
- *      bridging prompts to the embedded Node.js daemon and streaming live agent events back to UI.
+ * Hosts the native `android_arm64` Antigravity CLI (`agy` v1.4.12) runtime inside an
+ * Android `ForegroundService` configured with `foregroundServiceType="dataSync"` and `START_STICKY`.
  */
 class AgentDaemonService : Service() {
 
     companion object {
-        private const val TAG = "AgentDaemonService"
         private const val NOTIFICATION_CHANNEL_ID = "antigravity_daemon_channel"
         private const val NOTIFICATION_ID = 8765
 
         const val ACTION_START_DAEMON = "com.antigravity.studio.action.START_DAEMON"
         const val ACTION_STOP_DAEMON = "com.antigravity.studio.action.STOP_DAEMON"
-        const val ACTION_RESTART_DAEMON = "com.antigravity.studio.action.RESTART_DAEMON"
 
         fun startService(context: Context) {
             val intent = Intent(context, AgentDaemonService::class.java).apply {
@@ -79,41 +51,14 @@ class AgentDaemonService : Service() {
                 context.startService(intent)
             }
         }
-
-        fun stopService(context: Context) {
-            val intent = Intent(context, AgentDaemonService::class.java).apply {
-                action = ACTION_STOP_DAEMON
-            }
-            context.startService(intent)
-        }
     }
 
     enum class EngineStatus(val title: String, val detail: String) {
-        STARTING("Starting Engine...", "Extracting arm64-v8a Node.js runtime & initializing heap"),
-        LISTENING("Listening on port 8765", "Antigravity Daemon active (--max-old-space-size=256)"),
-        EXECUTING_TASK("Executing Task", "Streaming live agent thoughts & workspace diffs"),
-        ERROR("Engine Error", "Daemon process encountered an error — tap to inspect")
+        STARTING("Starting Antigravity CLI...", "Extracting native arm64-v8a agy v1.4.12 binary"),
+        LISTENING("Listening on port 8765", "Antigravity CLI v1.4.12 Ready (256MB Heap Cap)"),
+        EXECUTING_TASK("Executing Agent Turn", "Streaming live NDJSON events from agy"),
+        ERROR("Engine Error", "Antigravity CLI process reported an issue")
     }
-
-    @Serializable
-    data class AgentPromptPayload(
-        val sessionId: String,
-        val workspace: String,
-        val prompt: String,
-        val model: String,
-        val permissionMode: String
-    )
-
-    @Serializable
-    data class AgentStreamEvent(
-        val type: String,
-        val sessionId: String,
-        val content: String,
-        val durationSeconds: Int = 0,
-        val additions: Int = 0,
-        val deletions: Int = 0,
-        val filePath: String? = null
-    )
 
     inner class LocalBinder : Binder() {
         fun getService(): AgentDaemonService = this@AgentDaemonService
@@ -121,7 +66,6 @@ class AgentDaemonService : Service() {
 
     private val binder = LocalBinder()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     lateinit var runtimeInstaller: RuntimeInstaller
         private set
@@ -129,21 +73,11 @@ class AgentDaemonService : Service() {
     lateinit var processManager: AntigravityProcessManager
         private set
 
-    private val okHttpClient: OkHttpClient by lazy {
-        OkHttpClient.Builder()
-            .connectTimeout(3, TimeUnit.SECONDS)
-            .readTimeout(0, TimeUnit.MILLISECONDS) // WebSocket / SSE streaming
-            .retryOnConnectionFailure(true)
-            .build()
-    }
-
-    private var webSocket: WebSocket? = null
-
     private val _engineStatus = MutableStateFlow(EngineStatus.STARTING)
     val engineStatus: StateFlow<EngineStatus> = _engineStatus.asStateFlow()
 
-    private val _agentEvents = MutableSharedFlow<AgentStreamEvent>(extraBufferCapacity = 128)
-    val agentEvents: SharedFlow<AgentStreamEvent> = _agentEvents.asSharedFlow()
+    val streamEvents: SharedFlow<AntigravityProcessManager.AgyStreamEvent>
+        get() = processManager.streamEvents
 
     val terminalLogs: SharedFlow<String>
         get() = processManager.outputFlow
@@ -157,67 +91,54 @@ class AgentDaemonService : Service() {
 
         promoteToForeground(EngineStatus.STARTING)
         observeProcessState()
-        bootDaemonEngine()
+        bootCliEngine()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP_DAEMON -> {
                 serviceScope.launch {
-                    disconnectWebSocket()
-                    processManager.stopDaemon()
+                    processManager.stopActiveProcess()
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
                 }
                 return START_NOT_STICKY
             }
-            ACTION_RESTART_DAEMON -> {
-                serviceScope.launch {
-                    updateEngineStatus(EngineStatus.STARTING, "Restarting Node.js CLI daemon...")
-                    processManager.stopDaemon()
-                    bootDaemonEngine()
-                }
-            }
             else -> {
                 if (processManager.processState.value is AntigravityProcessManager.DaemonProcessState.Stopped) {
-                    bootDaemonEngine()
+                    bootCliEngine()
                 }
             }
         }
-        // Strictly configured with START_STICKY so the OS recreates the persistent engine if reclaimed
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onDestroy() {
-        disconnectWebSocket()
         serviceScope.launch {
-            processManager.stopDaemon()
+            processManager.stopActiveProcess()
         }
         serviceScope.cancel()
         super.onDestroy()
     }
 
-    private fun bootDaemonEngine() {
+    private fun bootCliEngine() {
         serviceScope.launch {
-            updateEngineStatus(EngineStatus.STARTING, "Installing arm64-v8a binaries into filesDir/runtime...")
-            val result = processManager.startDaemon(
-                workspaceName = "AntigravityAndroid",
-                port = AntigravityProcessManager.DEFAULT_PORT
-            )
-            result.onSuccess { pid ->
-                updateEngineStatus(
-                    EngineStatus.LISTENING,
-                    "Listening on 127.0.0.1:${AntigravityProcessManager.DEFAULT_PORT} (PID $pid • 256MB Heap)"
-                )
-                connectLocalWebSocket(AntigravityProcessManager.DEFAULT_PORT)
-            }.onFailure { err ->
-                updateEngineStatus(
-                    EngineStatus.ERROR,
-                    err.message ?: "Failed to spawn Node.js runtime"
-                )
-            }
+            updateEngineStatus(EngineStatus.STARTING, "Unpacking official arm64-v8a agy v1.4.12 binary...")
+            processManager.initializeCliEngine(AntigravityProcessManager.DEFAULT_PORT)
+                .onSuccess { version ->
+                    updateEngineStatus(
+                        EngineStatus.LISTENING,
+                        "Antigravity CLI v$version active • Port ${AntigravityProcessManager.DEFAULT_PORT}"
+                    )
+                }
+                .onFailure { err ->
+                    updateEngineStatus(
+                        EngineStatus.ERROR,
+                        err.message ?: "Failed to initialize Antigravity CLI"
+                    )
+                }
         }
     }
 
@@ -226,156 +147,57 @@ class AgentDaemonService : Service() {
             processManager.processState.collect { state ->
                 when (state) {
                     is AntigravityProcessManager.DaemonProcessState.Starting -> {
-                        updateEngineStatus(EngineStatus.STARTING, "Spawning Node.js process...")
+                        updateEngineStatus(EngineStatus.STARTING, "Initializing agy CLI runtime...")
                     }
-                    is AntigravityProcessManager.DaemonProcessState.Running -> {
+                    is AntigravityProcessManager.DaemonProcessState.Ready -> {
                         updateEngineStatus(
                             EngineStatus.LISTENING,
-                            "Listening on port ${state.port} (PID ${state.pid})"
+                            "Antigravity CLI v${state.cliVersion} Ready • Port ${state.port}"
                         )
                     }
-                    is AntigravityProcessManager.DaemonProcessState.ExecutingTask -> {
+                    is AntigravityProcessManager.DaemonProcessState.ExecutingTurn -> {
                         updateEngineStatus(
                             EngineStatus.EXECUTING_TASK,
-                            "Running: ${state.activeCommand}"
+                            "Running ${state.model} in ${state.workspace} (PID ${state.pid})"
                         )
                     }
                     is AntigravityProcessManager.DaemonProcessState.Error -> {
                         updateEngineStatus(EngineStatus.ERROR, state.message)
                     }
-                    is AntigravityProcessManager.DaemonProcessState.Stopped -> {
-                        // Handled by start/stop actions
-                    }
+                    is AntigravityProcessManager.DaemonProcessState.Stopped -> Unit
                 }
             }
         }
     }
 
-    /**
-     * Dispatches an agent prompt from the Jetpack Compose UI to the local Node.js daemon
-     * over localhost IPC (WebSocket / HTTP fallback) and streams back live agent thoughts,
-     * tool calls, and Git diff cards.
-     */
-    fun dispatchPrompt(
-        sessionId: String,
-        workspace: String,
+    fun dispatchPromptToAgy(
         prompt: String,
-        model: String,
-        permissionMode: String
+        projectName: String,
+        modelId: String,
+        permissionPolicy: String,
+        conversationId: String?,
+        useSandbox: Boolean
     ) {
-        serviceScope.launch(Dispatchers.IO) {
-            updateEngineStatus(
-                EngineStatus.EXECUTING_TASK,
-                "[$model] Executing prompt in $workspace..."
-            )
-
-            val payload = AgentPromptPayload(
-                sessionId = sessionId,
-                workspace = workspace,
-                prompt = prompt,
-                model = model,
-                permissionMode = permissionMode
-            )
-            val serialized = json.encodeToString(payload)
-
-            // 1. Write to Daemon stdin & WebSocket if connected
-            processManager.writeToStdin(serialized)
-            webSocket?.send(serialized)
-
-            // 2. Also probe localhost HTTP endpoint if listening
-            runCatching {
-                val request = Request.Builder()
-                    .url("http://127.0.0.1:${AntigravityProcessManager.DEFAULT_PORT}/api/prompt")
-                    .post(serialized.toRequestBody("application/json".toMediaType()))
-                    .build()
-                okHttpClient.newCall(request).execute().use { response ->
-                    Log.d(TAG, "Localhost daemon HTTP ack: ${response.code}")
-                }
-            }
-
-            // 3. Stream live reasoning steps & workspace command execution
-            _agentEvents.emit(
-                AgentStreamEvent(
-                    type = "thought",
-                    sessionId = sessionId,
-                    content = "Analyzing workspace `$workspace` with $model ($permissionMode mode) and inspecting AST...",
-                    durationSeconds = 6
-                )
-            )
-
-            processManager.executeWorkspaceCommand(
-                commandLine = "echo \"[Agent:$model] Processing task: ${prompt.take(64).replace("\"", "'")}\" && ls -la",
-                workspaceName = workspace
-            )
-
-            delay(450L)
-
-            _agentEvents.emit(
-                AgentStreamEvent(
-                    type = "diff",
-                    sessionId = sessionId,
-                    content = "Updated runtime supervisor and adaptive Material 3 bindings for `$workspace`.",
-                    durationSeconds = 14,
-                    additions = 38,
-                    deletions = 5,
-                    filePath = "app/src/main/java/com/antigravity/studio/service/AgentDaemonService.kt"
-                )
-            )
-
-            _agentEvents.emit(
-                AgentStreamEvent(
-                    type = "assistant_message",
-                    sessionId = sessionId,
-                    content = "Task completed on local Node.js engine (`127.0.0.1:${AntigravityProcessManager.DEFAULT_PORT}`). All changes in `$workspace` verified against SELinux W^X and 256MB heap constraints."
-                )
-            )
-
-            updateEngineStatus(
-                EngineStatus.LISTENING,
-                "Listening on port ${AntigravityProcessManager.DEFAULT_PORT}"
-            )
-        }
-    }
-
-    /**
-     * Executes a shell/CLI tool command from the UI Inspector or Terminal sheet.
-     */
-    fun runTerminalCommand(command: String, workspace: String = "AntigravityAndroid") {
         serviceScope.launch {
-            processManager.executeWorkspaceCommand(command, workspace)
+            processManager.executeAgentTurn(
+                prompt = prompt,
+                projectName = projectName,
+                modelId = modelId,
+                permissionPolicy = permissionPolicy,
+                conversationId = conversationId,
+                useSandbox = useSandbox
+            )
         }
     }
 
-    private fun connectLocalWebSocket(port: Int) {
-        disconnectWebSocket()
-        val request = Request.Builder()
-            .url("ws://127.0.0.1:$port/ws")
-            .build()
-
-        webSocket = okHttpClient.newWebSocket(
-            request,
-            object : WebSocketListener() {
-                override fun onOpen(webSocket: WebSocket, response: Response) {
-                    Log.i(TAG, "Connected to local Node.js WebSocket IPC on port $port")
-                }
-
-                override fun onMessage(webSocket: WebSocket, text: String) {
-                    runCatching {
-                        val event = json.decodeFromString<AgentStreamEvent>(text)
-                        serviceScope.launch { _agentEvents.emit(event) }
-                    }
-                }
-
-                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    Log.d(TAG, "WebSocket IPC fallback to stdio stream (${t.message})")
-                }
-            }
-        )
+    fun runTerminalCommand(commandLine: String, projectName: String) {
+        serviceScope.launch {
+            processManager.executeWorkspaceCommand(commandLine, projectName)
+        }
     }
 
-    private fun disconnectWebSocket() {
-        webSocket?.close(1000, "Service shutting down")
-        webSocket = null
+    fun setApiKey(apiKey: String) {
+        processManager.apiKeyOverride = apiKey.trim()
     }
 
     private fun promoteToForeground(status: EngineStatus, customDetail: String? = null) {
@@ -385,12 +207,7 @@ class AgentDaemonService : Service() {
         } else {
             0
         }
-        ServiceCompat.startForeground(
-            this,
-            NOTIFICATION_ID,
-            notification,
-            foregroundType
-        )
+        ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, foregroundType)
     }
 
     private fun updateEngineStatus(status: EngineStatus, customDetail: String? = null) {
@@ -422,7 +239,7 @@ class AgentDaemonService : Service() {
 
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setContentTitle("Antigravity Engine • ${status.title}")
+            .setContentTitle("Antigravity • ${status.title}")
             .setContentText(detailText)
             .setStyle(NotificationCompat.BigTextStyle().bigText(detailText))
             .setOngoing(true)
@@ -430,11 +247,7 @@ class AgentDaemonService : Service() {
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentIntent(pendingLaunch)
-            .addAction(
-                android.R.drawable.ic_menu_close_clear_cancel,
-                "Stop Daemon",
-                pendingStop
-            )
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", pendingStop)
             .build()
     }
 
@@ -442,10 +255,10 @@ class AgentDaemonService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 NOTIFICATION_CHANNEL_ID,
-                "Antigravity Background Engine Daemon",
+                "Antigravity CLI Engine Daemon",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Persistent Node.js CLI runtime status & local agent IPC"
+                description = "Persistent Antigravity CLI (agy) status"
                 setShowBadge(false)
             }
             val manager = getSystemService(NotificationManager::class.java)

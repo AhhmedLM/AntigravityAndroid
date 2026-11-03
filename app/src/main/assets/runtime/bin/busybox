@@ -1,3 +1,0 @@
-#!/system/bin/sh
-# BusyBox Multi-call Binary Wrapper for Workspace Tooling
-exec /system/bin/sh "$@"

@@ -35,8 +35,8 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(0xFF111215.toInt()),
-            navigationBarStyle = SystemBarStyle.dark(0xFF111215.toInt())
+            statusBarStyle = SystemBarStyle.dark(0xFF0B0B0D.toInt()),
+            navigationBarStyle = SystemBarStyle.dark(0xFF0E0E10.toInt())
         )
         super.onCreate(savedInstanceState)
 
@@ -51,16 +51,20 @@ class MainActivity : ComponentActivity() {
                     uiState = uiState,
                     windowWidthSizeClass = windowSizeClass.widthSizeClass,
                     onSelectProject = viewModel::selectProject,
-                    onNewConversation = viewModel::createNewConversation,
+                    onSelectSession = viewModel::selectSession,
+                    onNewConversation = viewModel::startNewConversation,
                     onPromptChange = viewModel::updatePromptInput,
                     onSendPrompt = viewModel::sendPrompt,
                     onSelectModel = viewModel::selectModel,
-                    onCyclePermissionPreset = viewModel::cyclePermissionPreset,
+                    onSelectReviewPolicy = viewModel::selectReviewPolicy,
+                    onSelectCheckoutMode = viewModel::selectCheckoutMode,
                     onToggleThoughtExpanded = viewModel::toggleThoughtExpanded,
                     onOpenDiffReview = viewModel::openDiffReview,
-                    onSetInspectorVisible = viewModel::setInspectorSheetVisible,
-                    onTriggerQuickAction = viewModel::triggerQuickAction,
-                    onRunTerminalCommand = viewModel::runCustomTerminalCommand,
+                    onToggleOpenIdePane = viewModel::toggleOpenIdePane,
+                    onSetOpenIdePaneVisible = viewModel::setOpenIdePaneVisible,
+                    onSetSettingsVisible = viewModel::setSettingsDialogVisible,
+                    onSaveApiKey = viewModel::saveApiKey,
+                    onRunTerminalCommand = viewModel::runTerminalCommand,
                     modifier = Modifier
                         .fillMaxSize()
                         .systemBarsPadding()

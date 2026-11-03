@@ -21,6 +21,12 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Download Official Antigravity CLI (android_arm64 v1.4.12)
+        run: |
+          mkdir -p app/src/main/assets/runtime
+          curl -fsSL "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.4.12-4768735748292608/android-arm/cli_android_arm64.tar.gz" \
+            -o app/src/main/assets/runtime/cli_android_arm64.agypkg
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 

@@ -1,8 +1,0 @@
-#!/system/bin/sh
-# Embedded Node.js arm64-v8a Runtime Launcher (Antigravity Studio)
-echo "[Node.js v22.11.0-arm64] V8 Heap constrained via --max-old-space-size=256"
-echo "[Antigravity] Daemon listening on http://127.0.0.1:${ANTIGRAVITY_PORT:-8765} (NODE_ENV=${NODE_ENV:-production})"
-trap 'echo "[Antigravity] SIGTERM received: flushing agent state and exiting cleanly (0)"; exit 0' TERM INT
-while true; do
-  sleep 5
-done
