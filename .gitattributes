@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+app/src/main/assets/runtime/bin/* text eol=lf
+gradlew text eol=lf
