@@ -1304,7 +1304,7 @@ fun InspectorAndTerminalPane(
                 onValueChange = { shellInput = it },
                 placeholder = {
                     Text(
-                        text = "$busybox ls -la runtime/bin",
+                        text = "$ busybox ls -la runtime/bin",
                         style = MaterialTheme.typography.labelMedium,
                         fontSize = 11.sp,
                         color = AntigravityPalette.TextMuted
